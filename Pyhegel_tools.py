@@ -1,9 +1,6 @@
 #!/bin/env/python
 #! -*- coding: utf-8 -*-
 
-# Virtual intruments
-
-# temperature_control_sample
 class lakeshore_wrapper(object):
     """ 
         lakeshore_wrapper is a logical device derived from lakeshore_370
@@ -100,14 +97,14 @@ class Yoko_wrapper(object):
             - Make it inherit from pyhegel so that everything works as usual
     """
     __version__ = {'Yoko_wrapper':0.1}
-    def __init__(self,visa_addr='USB0::0x0B21::0x0039::91KB11655'):
+    def __init__(self,visa_addr='USB0::0x0B21::0x0039::91KB11655',**options):
         self._yoko = instruments.yokogawa_gs200(visa_addr)
         self.set(0)
     """
         Wrapper of existing behavior
     """
     def get(self):
-        return get(yoko)
+        return get(self._yoko)
     def set(self,V):
         set(self._yoko,V)
     def set_output(self,booleen):
@@ -175,11 +172,12 @@ class Guzik_wrapper(object):
             - 
             
         Todos :
-            - Add quick_histogram method
             - Add get_or_getcache
             - Can I make _is_debug work in a way that is actually usefull (i.e. reduce repetition in the code and the clutter)?
                 - Also in config() I make an instance of dummy_data but I'm not covering the case where more than one channel is declared
                 - This last problem propagates to the get function since idk what is the entended return format for the data when more than one channel is declared
+        Bugs :
+            - See comment In quick historam
     """
     __version__     =  {'Guzik_wrapper':0.1}
     _gz_instance =   [] 
@@ -210,11 +208,6 @@ class Guzik_wrapper(object):
                 self._gz_instance.append( instruments.guzik_adp7104() )
         else :
             self._gz_instance.append(None)
-    # def _is_debug(self,fct,*arg,**kwarg):
-        # if not self._debug : 
-            # return fct(*arg,**kwarg)
-        # else :
-            # return None
     def config(self, channels=None, n_S_ch=1024, bits_16=True, gain_dB=0., offset=0., equalizer_en=True, force_slower_sampling=False, ext_ref='default', _hdr_func=None):
         if not self._debug : 
             return self._gz.config(channels,n_S_ch,bits_16,gain_dB,offset,equalizer_en,force_slower_sampling,ext_ref,_hdr_func)
@@ -233,14 +226,22 @@ class Guzik_wrapper(object):
             return self._dummy_data[0,:]
     def get_pyhegel_instance(self):
         return self._gz
-    def get_snippet(snipsize=1000):
+    def get_snippet(self,snipsize=1000):
         if not self._debug : 
             return self.get()[:snipsize]
         else :
             return self._dummy_data[0,:snipsize]
-   
-class logger(object):
-    __version__ = {'logger':0.1}
+    def quick_histogram_int16(self,n_threads=32):
+        hist = Histogram_uint64_t_int16_t(n_threads,bit=16) # Bug : not using bit=16 does work but crashes in accumulate
+        if not self._debug : 
+            data = self.get()
+        else :
+            data = self._dummy_data
+        hist.accumulate(data)
+        plot(arange(-2.0**15,2.0**15),hist.get())
+        xlim(0,1023)
+class timer(object):
+    __version__ = {'timer':0.2}
     def __init__(self,size=1):
         self.timer = zeros((2,size))
     def watch(self):
@@ -260,7 +261,7 @@ def dictionnary_to_attributes(self,dict,user_key_to_attribute_key={}):
     for key in dict :
         setattr(self,conv[key],dict[key]) if key in conv else setattr(self,key,dict[key])
 
-class Experiment_log(object):
+class logger(object):
     """
         Times an experiment 
         and print events and progress
@@ -296,8 +297,8 @@ class Experiment_log(object):
          Bugs :
             - The first loop call prints a duration that makes no sense
     """   
-    __version__     = { 'Experiment_log'  : 0.1 }
-    __version__.update(logger.__version__)  
+    __version__     = { 'logger'  : 0.2 }
+    __version__.update(timer.__version__)  
  
     _default_log = \
     {
@@ -339,13 +340,13 @@ class Experiment_log(object):
         self._is_rate    =   'rate' in log_dict
         if self._is_rate :
             self._event_rate = log_dict['rate']
-        self._experiment = logger()
-        self._loop       = logger(len(self._loop_sizes))
+        self._experiment = timer()
+        self._loop       = timer(len(self._loop_sizes))
         self._is_event   = 'events' in log_dict
         if self._is_event :
             self._events_dict = log_dict['events']
             self._events_len  = len(self._events_dict.keys())
-            self._events      = logger(self._events_len)
+            self._events      = timer(self._events_len)
             self._events_frmt = self._build_events_frmt()
     def open(self):
         self._experiment.tic()
@@ -390,6 +391,31 @@ class Experiment_log(object):
         s_tuple += ')'
         print s_tuple + '\t' + s
 
+class logger_aqc_and_compute(logger):
+    """
+        A logger with default Aquisition and Computing events
+    """
+    __version__     = { 'logger_aqc_and_compute'  : 0.2 }
+    __version__.update(logger.__version__)   
+    def __init__(self,time_estimates,*arg,**log_dict):
+        if log_dict :
+            super(logger_aqc_and_compute,self).__init__(time_estimates,log_dict)
+        else :
+            n_measures  = arg[0]
+            l_Vdc       = arg[1]
+            l_data      = arg[2]
+            _aqc_and_compute_log       = \
+            {
+            'loop_sizes'    : ( n_measures , l_Vdc ),
+            'events'        : 
+                            {
+                                "Aquisition": "Acquisition : {:04.2F} [s]", 
+                                "Computing" : "Computing : {:04.2F} [s] "
+                            },
+            'rate'          : ( l_data*1.0e-9 ,"Rate : {:04.2F} [GSa/s] " )
+            }
+            super(logger_aqc_and_compute,self).__init__(time_estimates,_aqc_and_compute_log)
+        
 class Experiment(object):
     """
         TLDR :
@@ -440,7 +466,7 @@ class Experiment(object):
                                         and sets each devices into their initial sate (Good pratice)
                 - _init_objects      : initialize memory for large objects that will be used recurently (Falcultative)
                 - _set_data_default  : sets self.data to a initiale state 
-                - _init_log          : defines the dehavior of the logger (Falcultative)
+                - _init_log          : defines the dehavior of the timer (Falcultative)
                 - _set_data_default  : defines the initial state of the self._data list
         , defining them is in a sense falcultative as the child class will still work if some or all of those are not defined 
         but it may lead to undefined bahavior
@@ -459,13 +485,13 @@ class Experiment(object):
                         loop_core(i_tuple,cndtns_tuple) # note that i and cndtns are tuples
                 loop_close()                            # code that is executed after all the repetitions are over
             
-            see : Experiment._main_loop_iterator for the exact implementation
+            see : Experiment._repetition_loop_iterator for the exact implementation
             
             User minimally defines in child class :
                 - child._core_loop_iterator(self)
                 - child._loop_core(self,index_tuple,condition_tuple)
             But can also define
-                - child._main_loop_iterator(self)
+                - child._repetition_loop_iterator(self)
                 - child._repetition_loop_start(self,n)
                 - child._repetition_loop_end(self,n)
                 - child._all_loop_close(self)
@@ -497,19 +523,22 @@ class Experiment(object):
             - _CAPS_.. are overwritable by the child function (used for grand-mother, mother, child situations)
         
         Todos :
-            - Update the loading message so it shows the class type that's being loaded
-            - Make it such that the loading show an error message when loading fails somewhere ...
-            - Make a verbose option that show more text in run time
-            
+            - Should I removed the analysis computation that is automatically done in  initialization ?
+                - Removed/Commented for now
+            - Add reset_obj ?
+            - Add reset_analysis ?
+     
         Bugs :
             - The current way of saving and loading stuff can convert int -> float
             which can lead to some problem some times. No global fix for now. 
             I've patched it in the child class by enforcing type in the constructor methods using int()
             - Computing before measurement can sometime lead to crash dependin on what type of computation is done during analysis
     """
-    __version__     = { 'Experiment'  : 0.1 }
-    __version__.update(Experiment_log.__version__)
-    # Bunch of indirections to manage current and futur constructor overloading
+    __version__     = { 'Experiment'  : 0.2 }
+    __version__.update(logger.__version__)
+    @classmethod
+    def description(cls):
+        print cls.__doc__
     def __init__(self,conditions,devices,meta_info=None,**options):
         """
             - conditions    : example == (n_measures,Vdc,) 
@@ -526,75 +555,71 @@ class Experiment(object):
         self.__SET_data_default()
         self.__INIT_log()
     def __SET_options(self,options):
-        print '{} is setting options'.format(self.__class__.__name__)
+        self._verbose   = options['verbose'] if 'verbose'   in options else False
+        if self._verbose : 
+            print '{} is setting options'.format(self.__class__.__name__)
         self._is_data_from_experiment(options)
-        self._test  = options['test']    if 'test'  in options else True 
-        self._debug = options['debug']   if 'debug' in options else False 
-        self._SET_options(options)
-    def _SET_options(self,options):
+        self._test      = options['test']    if 'test'      in options else True 
+        self._debug     = options['debug']   if 'debug'     in options else False 
+        self._options   = options
         self._set_options(options)
     def __SET_conditions(self,conditions):
-        print '{} is setting conditions'.format(self.__class__.__name__)
-        self._SET_conditions(conditions)
-    def _SET_conditions(self,conditions):
+        if self._verbose : 
+            print '{} is setting conditions'.format(self.__class__.__name__)
+        self._conditions     =   conditions
+        self._n_measures     =   conditions[0]
         self._set_conditions(conditions)       
     def __SET_meta_info(self,meta_info):
-        print '{} is setting meta_info'.format(self.__class__.__name__)
-        self. _SET_meta_info(meta_info)
-    def _SET_meta_info(self,meta_info):
+        if self._verbose : 
+            print '{} is setting meta_info'.format(self.__class__.__name__)
+        self._meta_info      =   meta_info
         self._set_meta_info(meta_info)
     def __BUILD_attributes(self):
-        print '{} is building attributes'.format(self.__class__.__name__)
-        self._BUILD_attributes()
-    def _BUILD_attributes(self):
-        self._build_attributes() 
+        if self._verbose : 
+            print '{} is building attributes'.format(self.__class__.__name__)
+        self._build_attributes()
     def __SET_devices(self,devices):
         if devices == None or devices == () or self._data_from_experiment == False :
             self._devices = None
         else :
-            print '{} is setting devices'.format(self.__class__.__name__)
-            self._SET_devices(devices)
-    def _SET_devices(self,devices):
-        self._set_devices(devices)
+            if self._verbose :
+                print '{} is setting devices'.format(self.__class__.__name__)
+            self._devices  =   devices
+            self._set_devices(devices)
     def __INIT_objects(self):
         if self._data_from_experiment == False :
             pass
         else :
-            print '{} is initializing objects'.format(self.__class__.__name__)
-            self._INIT_objects()
-            self._Experiment__update_analysis_from_aquisition() 
-    def _INIT_objects(self):
-        self._init_objects()
+            if self._verbose : 
+                print '{} is initializing objects'.format(self.__class__.__name__)
+            self._init_objects()
+            # This was removed for now as it causes more trouble than it solves...
+            # self._Experiment__update_analysis_from_aquisition()
     def __SET_data_default(self):
-        print '{} is setting default data'.format(self.__class__.__name__)
-        self._SET_data_default()
-    def _SET_data_default(self):
+        if self._verbose : 
+            print '{} is setting default data'.format(self.__class__.__name__)
         self._set_data_default()
     def __INIT_log(self):
         if self._data_from_experiment == False :
             pass
         else :
-            print '{} is initializing log'.format(self.__class__.__name__)
-            self._INIT_log()
-    def _INIT_log(self):
-        self._init_log()
-    
-    # Default behavior/Modifiables construtor methods for child class
+            if self._verbose : 
+                print '{} is initializing log'.format(self.__class__.__name__)
+            self._init_log()    
     def _set_options(self,options):
-        self._options        =   options
+        pass
     def _set_conditions(self,conditions):
-        self._conditions     =   conditions
-        self._n_measures     =   conditions[0] 
+        pass
     def _set_meta_info(self,meta_info):
-        self._meta_info      =   meta_info
+        pass
     def _build_attributes(self):
         pass
     def _set_devices(self,devices):
-        self._devices        =   devices
+        pass
     def _init_objects(self):
         pass
     def _init_log(self):
-        self._log            =   Experiment_log((),()) # Default logger
+        self._log            =   logger((),()) # Default timer
     def _set_data_default(self):
         self._data           =   []
     def get_data(self):
@@ -635,24 +660,31 @@ class Experiment(object):
     #################
     # Loop behavior #
     #################
-    def _repetition_loop_start(self,n):
-        pass
-    def _repetition_loop_end(self,n):
-        pass
+    # all_loop_open
+    # for n  in main_iterator :               
+        # repetition_loop_start(n)            
+        # for ... core_loop_iterator :        
+            # loop_core(i_tuple,cndtns_tuple) 
+        # repetition_loop_end(n)
+    # all_loop_close()
     def _all_loop_open(self):
         pass
-    def _all_loop_close(self):
-        pass
+    def _repetition_loop_iterator(self):
+        return range(self._compute_n_mesure())
+    def _repetition_loop_start(self,n):
+        pass 
     def _core_loop_iterator(self):
         Vdc     = 0.5*arange(10)     # dummy default behavior
         return Experiment._super_enumerate(Vdc)
-    def _main_loop_iterator(self):
-        return range(self._compute_n_mesure())
     def _loop_core(self,index_tuple,condition_tuple):
         # dummy default behavior
         i,          = index_tuple
         vdc,    = condition_tuple
         print "loop index {} dummy vdc = {}".format(i,vdc)
+    def _repetition_loop_end(self,n):
+        pass
+    def _all_loop_close(self):
+        pass
     ######################
     # Analysis Utilities #
     ######################
@@ -711,8 +743,8 @@ class Experiment(object):
         data = numpy.load(folder+'\\'+filename,allow_pickle=True)
         conditions  = data['conditions']
         devices     = None
-        meta_info   = data['meta_info']
-        options     = data['options'][()]
+        meta_info   = data['meta_info'][()] # to load a dict saved by numpy.savez
+        options     = data['options'][()]   # to load a dict saved by numpy.savez
         options['loading_data'] = True 
         
         self = cls(conditions,devices,meta_info,**options)
@@ -740,7 +772,7 @@ class Experiment(object):
         self._all_loop_close() 
         self._log.close()
     def __measurement_loop(self):
-        main_it = self._main_loop_iterator()
+        main_it = self._repetition_loop_iterator()
         self.__all_loop_open()
         for n  in main_it :
             index_it , condition_it = self._core_loop_iterator()
@@ -768,7 +800,6 @@ class Experiment(object):
 
 class Tunnel_junction(Experiment):
     """
-        v0.1
        This class is meants to encapsulated everything that all tunnel junction measurement have in common
        For now I'll do only the stationnary/no phase lock case
         Options :
@@ -778,99 +809,88 @@ class Tunnel_junction(Experiment):
             debug           : trigger debug
             _estimated_time_per_loop : 1.0 by default
         Todos : 
-           
+            - Add tunnel junction theoretical relations
         Bugs :
     """
     _e = 1.60217663e-19 # Coulomb
     _h = 6.62607015e-34 # Joule second
-    __version__     = { 'Tunnel_junction'  : 0.1 }
+    __version__     = { 'Tunnel_junction'  : 0.2 }
+    __version__.update(logger_aqc_and_compute.__version__) 
     __version__.update(Experiment.__version__) 
-    def _SET_options(self,options):
-        self._is_data_from_experiment(options)
-        self._options                   =   options
+    """
+        Public
+    """
+    """
+        Helper generators
+    """
+    @staticmethod
+    def gen_meta_info(circuit_info,compute_info,aqc_info,quads_info):
+        meta_info = {'circuit_info':circuit_info,'compute_info':compute_info,'aqc_info':aqc_info,'quads_info':quads_info}
+        return meta_info
+    @staticmethod
+    def gen_aqc_info(l_data,dt):
+        aqc_info = {'l_data':l_data,'dt':dt}
+        return aqc_info
+    @staticmethod
+    def gen_compute_info(n_threads):
+        compute_info = {'n_threads':n_threads}
+        return compute_info
+    @staticmethod
+    def gen_circuit_info(R_jct,R_1M,R_tl):
+        circuit_info = {'R_jct':R_jct,'R_1M':R_1M,'R_tl':R_tl}
+        return circuit_info
+    @staticmethod
+    def gen_quads_info(l_kernel):
+        l_kernel    = int(l_kernel)
+        l_hc        = l_kernel/2 + 1 
+        quads_info = {'l_kernel':l_kernel,'l_hc':l_hc}
+        return quads_info
+    """
+        Private
+    """
+    def _set_options(self,options):
         self._interlacing               =   options['interlacing']      if 'interlacing'        in options else False
         self._Vdc_pos_and_neg           =   options['Vdc_pos_and_neg']  if 'Vdc_pos_and_neg'    in options else True
-        self._test                      =   options['test']             if 'test'               in options else True 
-        self._debug                     =   options['debug']            if 'debug'              in options else False 
-        self._estimated_time_per_loop   =   options['time_per_loop']    if 'time_per_loop'      in options else 1.0
-        self._set_options(options)      
-    def _SET_conditions(self,conditions):
-        self._conditions        =   conditions      
-        self._n_measures        =   conditions[0]
+        self._estimated_time_per_loop   =   options['time_per_loop']    if 'time_per_loop'      in options else 1.0     
+    def _set_conditions(self,conditions):
         self.Vdc                =   conditions[1]
-    def _SET_meta_info(self,meta_info):
-        self._meta_info         =   meta_info
-        self._circuit_info      =   meta_info[0]        # R_jct , R_1M , ...
-        self._compute_info      =   meta_info[1]        # n_threads , ...
-        self._aqc_info          =   meta_info[2]        # l_data    , dt , ...
-        self._quads_info        =   meta_info[3]        # l_kernel , ...
-        self._set_meta_info(meta_info)
-    def _SET_devices(self,devices):
-        # I dont like this because I had to overwrite the _SET_devices function from experiement
-        # I also had to redo the logic that avoids to load devices when data is loaded
-        if devices == None or devices == () or self._data_from_experiment == False :
-            self._devices = None
-        else :
-            self._devices            =   devices
-            self._gz                 =   devices[0] 
-            self._yoko               =   devices[1]
-            self._yoko.set_init_state(abs(self.Vdc).max())
-            self._set_devices(devices)
-    def _INIT_log(self):
-        self._log_dict       = \
-        {
-        'loop_sizes'    : ( self._n_measures , len(self.Vdc) ),
-        'events'        : \
-                        {
-                            "Aquisition": "Acquisition : {:04.2F} [s]", 
-                            "Computing" : "Computing : {:04.2F} [s] "
-                        },
-        'rate'          : ( self._l_data*1.0e-9 ,"Rate : {:04.2F} [GSa/s] " )\
-        }
-        tmp = self._estimated_time_per_loop 
-        self._log                = Experiment_log((self._n_measures*tmp,tmp) , self._log_dict)
-        self._init_log()
-    def _BUILD_attributes(self):
-        self._BUILD_from_circuit    (self._circuit_info)
-        self._BUILD_from_compute    (self._compute_info)
-        self._BUILD_from_aqc        (self._aqc_info)    
-        self._BUILD_from_quads      (self._quads_info)
+    def _set_meta_info(self,meta_info):
+        self._circuit_info      =   meta_info['circuit_info']   # R_jct , R_1M , ...
+        self._compute_info      =   meta_info['compute_info']   # n_threads , ...
+        self._aqc_info          =   meta_info['aqc_info']       # l_data    , dt , ...
+        self._quads_info        =   meta_info['quads_info']     # l_kernel , ...
+    def _set_devices(self,devices):
+        self._gz                 =   devices[0] 
+        self._yoko               =   devices[1]
+        self._yoko.set_init_state(abs(self.Vdc).max())
+    def _init_log(self):
+        l_Vdc           = len(self.Vdc)
+        n               = self._n_measures
+        l_data          = self._l_data
+        tmp             = self._estimated_time_per_loop 
+        times_estimate  = (self._n_measures*tmp,tmp)
+        self._log       = logger_aqc_and_compute(times_estimate,n,l_Vdc,l_data)
+    def _build_attributes(self):
+        self._build_from_circuit    (self._circuit_info)
+        self._build_from_compute    (self._compute_info)
+        self._build_from_aqc        (self._aqc_info)    
+        self._build_from_quads      (self._quads_info)
         self._Vdc_antisym       =   self._compute_Vdc_antisym(self.Vdc)
         self._Vdc_exp           =   self._compute_Vdc_experimental(self.Vdc)
-        self._build_attributes()
-    def _BUILD_from_circuit(self,circuit_info):
-        self._R_jct             =   circuit_info[0]
-        self._R_1M              =   circuit_info[1]
-        self._R_tl              =   circuit_info[2]
-        self._build_from_circuit(circuit_info)
-    def _BUILD_from_compute(self,compute_info):
-        self._n_threads         =   compute_info[0]
-        self._build_from_compute(compute_info)
-    def _BUILD_from_aqc(self,aqc_info):
-        self._l_data            =   int(aqc_info[0])
-        self._dt                =   aqc_info[1]
-        self._build_from_aqc(aqc_info)
-    def _BUILD_from_quads(self,quads_info):
-        self._l_kernel          =   int(quads_info[0])
-        self._l_hc              =   self._l_kernel/2 + 1
-        self._build_from_quads(quads_info)       
-    def _init_log(self):
-        pass
-    def _build_attributes(self):
-        pass
     def _build_from_circuit(self,circuit_info):
-        pass
+        self._R_jct             =   circuit_info['R_jct']
+        self._R_1M              =   circuit_info['R_1M']
+        self._R_tl              =   circuit_info['R_tl']
     def _build_from_compute(self,compute_info):
-        pass
+        self._n_threads         =   compute_info['n_threads']
     def _build_from_aqc(self,aqc_info):
-        pass
+        self._l_data            =   int(aqc_info['l_data'])
+        self._dt                =   aqc_info['dt']
     def _build_from_quads(self,quads_info):
-        pass
+        self._l_kernel          =   int(quads_info['l_kernel'])
+        self._l_hc              =   self._l_kernel/2 + 1     
     def __del__(self):
         self._yoko.set_close_state()
-    #######################
-    # Extra Gets and sets #
-    #######################
     #############
     # Utilities #
     #############
@@ -899,10 +919,42 @@ class Tunnel_junction(Experiment):
     #################
     # Loop behavior #
     #################
-    
-    ############
-    # Analysis #
-    ############
+    def _compute_Vdc_core_loop(self,Vdc):
+        Vdc_loop = self._compute_Vdc_experimental(Vdc)
+        return self._compute_next_Vdc(Vdc_loop)
+    def _repetition_loop_start(self,n):
+        Vdc_0   =   self._compute_Vdc_experimental(self.Vdc)[0]
+        print 'Preparing loop : Vdc = {:0.1F}'.format(Vdc_0)
+        self._yoko.set_and_wait(Vdc_0) # 1st Vdc
+    def _core_loop_iterator(self):
+        Vdc = self._compute_Vdc_core_loop(self.Vdc)
+        return Experiment._super_enumerate(Vdc)
+    def _all_loop_close(self):
+        print 'closing loop : Vdc = {:0.1F}'.format(0)
+        self._yoko.set(0)  
+    ######################
+    # Analysis Utilities #
+    ######################
+    def _compute_cumulants_sample(self,cumulants):
+        if self._interlacing :
+            ref =  cumulants[...,::2]
+            cdn =  cumulants[...,1::2]
+            cumulants_sample = cdn - ref
+        else :
+            ref =  cumulants[...,0]
+            cdn =  cumulants[...,1::]
+            cumulants_sample = cdn - ref[...,None]
+        return cumulants_sample
+    def _compute_cumulants_sample_std(self,cumulants_std):
+        if self._interlacing :
+            ref =  cumulants_std[...,::2]
+            cdn =  cumulants_std[...,1::2]
+            cumulants_sample_std = cdn + ref
+        else :
+            ref =  cumulants_std[...,0]
+            cdn =  cumulants_std[...,1::]
+            cumulants_sample_std = cdn + ref[...,None]
+        return cumulants_sample_std
     def _window_after_2ns(self,S2_sample):
         """
             Damping everything more than 2 ns
@@ -971,16 +1023,9 @@ class Tunnel_junction(Experiment):
         tmp = where(Vdc==V)[0]
         if tmp.size==0: return False
         return tmp[0]
-    #########
-    # Plots #
-    #########
-    ################################
-    # Privates/Should never change #
-    ################################
 
 class Gain_amplitude(Tunnel_junction):
     """
-        v0.1
         - conditions == (n_measures,Vdc,) 
             - n_measures: the maximum number of time to repeat the experiment
             - Vdc       : 1D array of Vdc to use on yokogawa
@@ -1011,17 +1056,16 @@ class Gain_amplitude(Tunnel_junction):
             - When calling the same script twice the computed values for S2_sample are bad. 
                 Dunno how to fix... not a problem for now
     """
-    __version__     = { 'Gain_amplitude'  : 0.1 }
+    __version__     = { 'Gain_amplitude'  : 0.2 }
     __version__.update(Tunnel_junction.__version__)
     __version__.update(Yoko_wrapper.__version__)
     __version__.update(Guzik_wrapper.__version__)
     def _init_objects(self):
         self._init_acorr()
     def _build_from_quads(self,quads_info):
-        self._l_kernel  = self._l_kernel/2 + 1
-        self._l_hc      = self._l_kernel/2 + 1
-    def __del__(self):
-        self._yoko.set_close_state()
+        super(Gain_amplitude,self)._build_from_quads(quads_info)
+        self._l_kernel_sym  = self._l_kernel/2 + 1 # Diviser par deux car on va symétrisé
+        self._l_hc_sym      = self._l_kernel/2 + 1
     #######################
     # Extra Gets and sets #
     #######################
@@ -1033,38 +1077,37 @@ class Gain_amplitude(Tunnel_junction):
     # Utilities #
     #############
     def _init_acorr(self):
-        self._data          = self._gz.get() # int16
+        data_type = 'int16'
         l_vdc               = len(self._compute_Vdc_experimental(self.Vdc))
         acorr_shape         = ( l_vdc ,) 
-        self._acorr         = r_[[ACorrUpTo(self._l_kernel,self._data) for i in range(prod(acorr_shape))]]
+        self._acorr         = r_[[ACorrUpTo(self._l_kernel_sym,data_type) for i in range(prod(acorr_shape))]]
         self._acorr.shape   = acorr_shape
-    def _compute_Vdc_core_loop(self,Vdc):
-        Vdc_loop = self._compute_Vdc_experimental(Vdc)
-        return self._compute_next_Vdc(Vdc_loop)
     #################
     # Loop behavior #
     #################
-    def _repetition_loop_start(self,n):
-        Vdc_0   =   self._compute_Vdc_experimental(self.Vdc)[0]
-        print 'Preparing loop : Vdc = {:0.1F}'.format(Vdc_0)
-        self._yoko.set_and_wait(Vdc_0) # 1st Vdc
-    def _all_loop_close(self):
-        print 'closing loop : Vdc = {:0.1F}'.format(0)
-        self._yoko.set(0)    
-    def _core_loop_iterator(self):
-        Vdc = self._compute_Vdc_core_loop(self.Vdc)
-        return Experiment._super_enumerate(Vdc)
     def _loop_core(self,index_tuple,condition_tuple):
         """
             Works conditionnaly to the computing being slower than 0.4 sec
         """
-        j,          = index_tuple     
-        vdc_next,   = condition_tuple   
-        self._data = self._gz.get() # int16 
+        j,              = index_tuple     
+        vdc_next,       = condition_tuple   
+        self._data_gz   = self._gz.get() # int16 
         self._yoko.set(vdc_next)
         self._log.event(0)
-        self._acorr[j](self._data)
+        self._acorr[j](self._data_gz)
         self._log.event(1)
+    ############
+    # Debug    #
+    ############
+    # def _fig_all_acorr(self):
+        # fig = figure()
+        # for acorr in self._acorr :
+            # plot(acorr.res)
+    # def _fig_all_acorr_diff(self):
+        # fig = figure()
+        # a_reference = self._acorr[0]
+        # for acorr in self._acorr[1:] :
+            # plot(acorr.res-a_reference.res)
     ############
     # Analysis #
     ############
@@ -1161,77 +1204,280 @@ class Gain_amplitude(Tunnel_junction):
     # Privates/Should never change #
     ################################
 
-class PsVsVDC(Tunnel_junction):
+class Quads(Tunnel_junction):
     """
-        v0.1
-        
+        Help to generate inputs for the constructor
+            gen_xxx_info()
         Todos : 
-            - Build tool that make the productions of gauss_indexes,bigauss_indexes,flat_band easier
-            - Puts all the building filters tools in a dedicated class ..?
-                - Right now some kernel tools are here and some are in the TimeQuad class
-                    What would be the easy uniform way for doing that ?
+            - add a gen_xxx_info for quad_info
         Bugs :
+            - betas are not save therefore fig_betas doesnt work on loaded data
+            - 
+            - fig_n_no_fs idem
     """
-    __version__     = { 'Commutator_direct_mesurement'  : 0.1 }
+    __version__ = {'Quads': 0.2}
     __version__.update(Tunnel_junction.__version__)
     __version__.update(Yoko_wrapper.__version__)
     __version__.update(Guzik_wrapper.__version__)
-    def _set_meta_info(self,meta_info):
-        self._hist_info         =   meta_info[4]        # nb_of_bin , max
-    def _build_attributes(self):
-        self._build_from_hist       (self._hist_info)
+    __filters__ = {'gauss':0,'bigauss':1,'flatband':2}
+    """
+        Public
+    """
+    @staticmethod
+    def gen_freq(l_kernel,dt):
+        return numpy.fft.rfftfreq(l_kernel,dt)
+    @staticmethod
+    def gen_l_hc(l_kernel):
+        return l_kernel//2+1 
+    @staticmethod
+    def gen_compute_info(n_threads,l_fft):
+        compute_info = super(Quads,Quads).gen_compute_info(n_threads)
+        compute_info['l_fft'] = l_fft
+        return compute_info
+    @staticmethod
+    def gen_circuit_info(R_jct,R_1M,R_tl,g):
+        circuit_info = super(Quads,Quads).gen_circuit_info(R_jct,R_1M,R_tl)
+        circuit_info['g'] = g
+        return circuit_info
+    @staticmethod
+    def gen_quads_info(l_kernel,alpha,filters_info,kernel_conf=0):
+        # l_kernel, df, alpha, gauss_indexes, bigauss_indexes, flatband
+        quads_info =super(Quads,Quads).gen_quads_info(l_kernel)
+        quads_info['alpha'] = alpha
+        quads_info['filters_info'] = filters_info
+        quads_info['kernel_conf'] = kernel_conf
+        return quads_info
+    @staticmethod
+    def gen_filter_info(gauss_info,bigauss_info,flatband_info):
+        """
+            todos :
+                - make it work for any number of inputs ?
+        """
+        filter_info             = {'gauss':gauss_info,'bigauss':bigauss_info,'flatband':flatband_info}
+        filter_info['labels']   = Quads._gen_labels(filter_info)
+        filter_info['gauss']['slice'],filter_info['bigauss']['slice'],filter_info['flatband']['slice'] = Quads._gen_filters_slices(filter_info)
+        filter_info['strides']  = Quads._gen_filters_strides(filter_info)
+        filter_info['lengths']  = Quads._get_filters_len(filter_info)
+        filter_info['length']   = numpy.array(filter_info['lengths']).sum()
+        return filter_info
+    @staticmethod
+    def gen_gauss_info(fs,dfs,snap_on=True): 
+        """
+            bigauss_indexes is a n by 1 array
+            fs[0] = f_0, # central frequencie of the gaussian
+            fs[1] = ...
+            dfs.shape == fs.shape
+        """
+        fs  = numpy.array(fs)
+        if fs.size == 0 : # the array is empty
+            return {'fs':numpy.array([]),'dfs':numpy.array([]),'snap_on':snap_on}
+        else: 
+            dfs = numpy.array(dfs)
+            if dfs.size == 1 :  # all the same df
+                dfs = dfs*ones(fs.shape)  
+            gauss_info              = {'fs':fs,'dfs':dfs,'snap_on':snap_on}
+        gauss_info['labels']    = Quads._gen_gauss_labels   (gauss_info) 
+        return gauss_info
+    @staticmethod
+    def gen_bigauss_info(fs,dfs,snap_on=True):
+        """
+            bigauss_indexes is a n by 2 array
+            fs[0,:] = f_0, f_1 # central frequencies of the first and seconde gaussian
+            fs[1,:] = ...
+        """
+        fs  = numpy.array(fs)
+        if fs.size == 0 : # the array is empty
+            bigauss_info = {'fs':numpy.array([]),'dfs':numpy.array([]),'snap_on':snap_on}
+        else :
+            dfs = numpy.array(dfs)
+            if dfs.size == 1 :  # all the same df
+                dfs = dfs*ones(fs.shape)
+            bigauss_info            = {'fs':fs,'dfs':dfs,'snap_on':snap_on}
+        bigauss_info['labels']  = Quads._gen_bigauss_labels (bigauss_info)
+        return bigauss_info
+    @staticmethod
+    def gen_flatband_info(fs,rise,fall,snap_on=True):
+        """
+            fs[0,:]         = f_0, f_1 # central frequencies of the first and seconde gaussian
+            fs[1,:]         = ...
+            rise_fall[0,:]  = rise, fall
+            rise_fall[1,:]  = ...
+        """
+        fs  = numpy.array(fs)
+        if fs.size == 0 : # the array is empty
+            flatband_info = {'fs':numpy.array([]),'rise_fall':numpy.array([]),'snap_on':snap_on}
+        else :
+            rise_fall = zeros(fs.shape)
+            rise_fall[:,0] = rise
+            rise_fall[:,1] = fall
+            flatband_info  = {'fs':fs,'rise_fall':rise_fall,'snap_on':snap_on}
+        flatband_info['labels'] = Quads._gen_flatband_labels(flatband_info)
+        return flatband_info
+    @staticmethod
+    def gen_Filters(filter_info):
+        """
+            todos :
+                - make it work for any number of inputs ?
+        """
+        Filters_gauss                           = Quads.gen_gauss_Filters   (l_kernel,dt,filter_info['gauss']   )
+        Filters_bigauss                         = Quads.gen_bigauss_Filters (l_kernel,dt,filter_info['bigauss'] )
+        Filter_flatband                         = Quads.gen_flatband        (l_kernel,dt,filter_info['flatband'])
+        return Quads._concatenate_Filters(Filters_gauss,Filters_bigauss,Filter_flatband)
+    @staticmethod
+    def gen_gauss_Filters(l_kernel,dt,gauss_info):
+        fs , dfs    = Quads._extract_gauss_info(gauss_info)
+        snap_on     = Quads._checks_snap_on(**gauss_info)
+        if fs.size == 0 :
+            return array([])
+        if snap_on :
+            F   = Quads.gen_freq(l_kernel,dt)
+            fs  = Quads._find_nearest_F_to_f(fs,F)
+            gauss_info['fs'] = fs # Modifying the dict
+        Filters = empty( (len(fs),l_kernel//2+1) , dtype=complex , order='C' ) 
+        for i,(f,df) in enumerate(zip(fs,dfs)):
+            Filters[i,:] = Quads.Gaussian_filter_normalized( f , df , l_kernel, dt )
+        return Filters  
+    @staticmethod
+    def gen_bigauss_Filters(l_kernel,dt,bigauss_info):
+        fs , dfs    = Quads._extract_bigauss_info(bigauss_info)
+        snap_on     = Quads._checks_snap_on(**bigauss_info)
+        if fs.shape[1] !=2 :
+            raise Exception('bigauss_indexes needs to be n by 2.')
+        if fs.size == 0 :
+            return array([])
+        if snap_on :
+            F   = Quads.gen_freq(l_kernel,dt)
+            fs  = Quads._find_nearest_F_to_f(fs,F)
+            bigauss_info['fs'] = fs # Modifying the dict
+        Filters =  numpy.empty( (fs.shape[0],l_kernel//2+1) , dtype=complex , order='C' ) 
+        for i,(f,df) in enumerate(zip(fs,dfs)) :
+            Filters[i,:] = Quads._Bi_Gaussian_filter_normalized(f[0],f[1],df[0],df[1],l_kernel,dt) 
+        return Filters
+    @staticmethod
+    def gen_flatband(l_kernel,dt,flatband_info):
+        l_hc            = Quads.gen_l_hc(l_kernel)
+        fs,rise_fall    = Quads._extract_flatband_info(flatband_info)
+        if fs.size ==0 :
+            return array([])
+        Filters     = empty( (fs.shape[0],l_hc),dtype=complex,order='C' ) 
+        for i,(flat,r_f) in enumerate(zip(fs,rise_fall)) :  
+            Filters[i,:]    = TimeQuad_uint64_t.compute_flatband(l_hc,dt,flat[0]-r_f[0],flat[0],flat[1],flat[1]+r_f[1])
+        return Filters
+    """
+        Private
+    """
+    @staticmethod
+    def _find_nearest_F_to_f(f,F):
+        f_shape = f.shape
+        f = f.flatten()
+        X = numpy.empty(f.shape)
+        for i,x in enumerate(f) :
+            X[i] = F[numpy.abs(F-x).argmin()]
+        X.shape = f_shape
+        return X
+    @staticmethod
+    def _checks_snap_on(**options):
+        return options['snap_on'] if 'snap_on'  in options else True
+    @staticmethod
+    def _extract_filter_info(filter_info):
+        return filter_info['gauss'],filter_info['bigauss'],filter_info['flatband'],
+    @staticmethod
+    def _extract_gauss_info(gauss_info): 
+        return gauss_info['fs'] , gauss_info['dfs']
+    @staticmethod
+    def _extract_bigauss_info(bigauss_info):
+        return Quads._extract_gauss_info(bigauss_info)
+    @staticmethod
+    def _extract_flatband_info(flatband_info): 
+        return flatband_info['fs'],flatband_info['rise_fall'] 
+    @staticmethod
+    def _get_filters_len(filter_info):
+        gauss_info,bigauss_info,flatband_info = Quads._extract_filter_info(filter_info)
+        fs_g,_          =   Quads._extract_gauss_info(gauss_info)
+        fs_bg,_         =   Quads._extract_bigauss_info(bigauss_info)
+        fs_fb,_         =   Quads._extract_flatband_info(flatband_info)
+        return fs_g.shape[0],fs_bg.shape[0],fs_fb.shape[0]
+    @staticmethod
+    def _gen_filters_strides(filter_info):
+        l_g,l_bg,l_fb       = Quads._get_filters_len(filter_info)
+        gauss_stride        = 0
+        bigauss_stride      = gauss_stride   + l_g
+        flatband_stride     = bigauss_stride + l_bg
+        return (gauss_stride,bigauss_stride,flatband_stride)
+    @staticmethod
+    def _gen_filters_slices(filter_info):
+        l_g,l_bg,l_fb   =   Quads._get_filters_len(filter_info) 
+        gauss_slice     =   slice(None        ,l_g            ,None)
+        bigauss_slice   =   slice(l_g         ,l_g+l_bg       ,None)
+        flatband_slice  =   slice(l_g+l_bg    ,l_g+l_bg+l_fb  ,None)
+        return gauss_slice,bigauss_slice,flatband_slice
+    @staticmethod
+    def _gen_labels(filter_info):
+        gauss_info,bigauss_info,flatband_info = Quads._extract_filter_info(filter_info)
+        return gauss_info['labels'] + bigauss_info['labels'] + flatband_info['labels']
+    @staticmethod
+    def _gen_gauss_labels(gauss_info,label_frmt="{:0.1f}"):
+        fs , dfs    = Quads._extract_gauss_info(gauss_info)
+        labels = []
+        for (f,df) in zip(fs,dfs) :
+            label = label_frmt.format(f)
+            labels.append(label)
+        return labels
+    @staticmethod
+    def _gen_bigauss_labels(bigauss_info,label_frmt="{:0.1f}&{:0.1f}"):
+        fs , dfs    = Quads._extract_bigauss_info(bigauss_info)
+        labels = []
+        for (f,df) in zip(fs,dfs) :
+            label = label_frmt.format(f[0],f[1])
+            labels.append(label)
+        return labels
+    @staticmethod
+    def _gen_flatband_labels(flatband_info,label_frmt="{:0.1f}-{:0.1f}"):
+        fs,_ =Quads._extract_flatband_info(flatband_info)
+        labels = []
+        for f in fs :
+            label = label_frmt.format(f[0],f[1])
+            labels.append(label)
+        return labels
+    @staticmethod
+    def _gen_composition_indexes(filters_info,composition):
+        """
+            A composition has shape m,2,n
+            m : composition index
+            n : combinations index
+            the 2nd index is for type and subindex
+        """
+        filter_type_indexes = composition[:,0,:]
+        filter_index        = composition[:,1,:]
+        strides             = filter_info['strides'] 
+        kernel_indexes      = numpy.zeros(filter_index.shape)
+        for i,stride in enumerate(strides):
+            kernel_indexes[numpy.where(filter_type_indexes==i)] = stride
+        kernel_indexes += filter_index
+        return kernel_indexes.astype(int)
+    def _build_filters(self,l_kernel,l_hc,dt,filter_info):
+        self._filter_info                       = filter_info
+        self._n_kernels                         = filter_info['length'] # alias
+        self._labels                            = self._filter_info['labels']   # alias
+        self._filter_info['Filters']            = Quads.gen_Filters(filter_info)
+        self._Filters                           = self._filter_info['Filters'] # alias
+    """
+        Contructors stuff
+        Overloading/overwritting from parents
+    """
     def _build_from_circuit(self,circuit_info):
-        self._g     = circuit_info[3]   # R_jct , R_1M , R_tl, g ,V_th
-        self._V_th  = circuit_info[4]
+        super(Quads,self)._build_from_circuit(circuit_info)
+        self._g     = circuit_info['g']   # R_jct , R_1M , R_tl, g 
     def _build_from_compute(self,compute_info):
-        self._l_fft     = compute_info[1]
+        super(Quads,self)._build_from_compute(compute_info)
+        self._l_fft     = compute_info['l_fft']
     def _build_from_quads(self,quads_info):
-        # l_kernel, l_hc, df, alpha, gauss_indexes, bigauss_indexes, flat_band
-        self._df                =   quads_info[1]
-        self._alpha             =   quads_info[2]
-        self._kernel_conf       =   0                       # Static for now ==> only one quadrature
-        self._filter_params     =   quads_info[3]
-        self._gauss_indexes     =   self._filter_params[0]
-        self._bigauss_indexes   =   self._filter_params[1]
-        self._flat_band         =   self._filter_params[2]
-        self._build_filters(self._l_kernel,self._l_hc,self._dt,self._df,self._gauss_indexes,self._bigauss_indexes,self._flat_band)
-    def _build_from_hist(self,hist_info):
-        self._nb_of_bin         =   int(hist_info[0])
-        self._max               =   hist_info[1]  
-    def _build_filters(self,l_kernel,l_hc,dt,df,gauss_indexes,bigauss_indexes,flat_band):
-        Filters_gauss   , fs_gauss      , labels_gauss      = self._gen_gauss_Filters     (l_kernel,dt,gauss_indexes     ,df)
-        Filters_bigauss , fs_bigauss    , labels_bigauss    = self._gen_bigauss_Filters   (l_kernel,dt,bigauss_indexes   ,df)
-        Filter_flat_band, fs_flat_band  , label_flat_band   = self._gen_flat_band         (l_hc,dt,flat_band[0],flat_band[1],flat_band[2])
-        l_g     =   len(gauss_indexes)
-        l_bg    =   len(bigauss_indexes)
-        l_fb    =   len(flat_band[0])
-        self._gauss_slice       = slice(None        ,l_g            ,None)
-        self._bigauss_slice     = slice(l_g         ,l_g+l_bg       ,None)
-        self._flat_band_slice   = slice(l_g+l_bg    ,l_g+l_bg+l_fb  ,None)
-        self._Filters   = PsVsVDC._concatenate_Filters(Filters_gauss,Filters_bigauss,Filter_flat_band)
-        self._n_kernels = self._Filters.shape[0]
-        self._fs        = PsVsVDC._concatenate_fs(fs_gauss,fs_bigauss,fs_flat_band)
-        self._labels    = labels_gauss + labels_bigauss + label_flat_band
+        super(Quads,self)._build_from_quads(quads_info)
+        self._alpha             =   quads_info['alpha']
+        self._kernel_conf       =   quads_info['kernel_conf']
+        self._build_filters(self._l_kernel,self._l_hc,self._dt,quads_info['filters_info'])
     def _init_objects(self):
         self._init_TimeQuad()
-        self._init_Histograms()
-    def _init_log(self):
-        self._log_dict       = \
-        {
-        'loop_sizes'    : ( self._n_measures , len(self.Vdc) ),
-        'events'        : \
-                        {
-                            "Aquisition": "Acquisition : {:04.2F} [s]", 
-                            "Computing" : "Computing : {:04.2F} [s] "
-                        },
-        'rate'          : ( self._l_data*1.0e-9 ,"Rate : {:04.2F} [GSa/s] " )\
-        }
-        # self._time_estimates = for now this is done statically in the class
-        Estimated_time_per_loop = 59.33 
-        self._time_estimates     = (self._n_measures*Estimated_time_per_loop,Estimated_time_per_loop)
-        self._log                = Experiment_log(self._time_estimates , self._log_dict)
-    def __del__(self):
-        self._yoko.set_close_state()
     #######################
     # Extra Gets and sets #
     #######################
@@ -1239,37 +1485,13 @@ class PsVsVDC(Tunnel_junction):
     # Utilities #
     #############
     @staticmethod
-    def find_index_nearest_to_f(f,l_kernel,dt):
-        x_f = numpy.fft.rfftfreq(l_kernel , dt)
-        if f < min(x_f) or f > max(x_f):
-            raise Exception('Outside frequencie range')
-        i   = (numpy.abs(x_f-f)).argmin()
-        return i
-    @staticmethod
-    def gen_gauss_input(t_f,l_kernel,dt):
-        L = []
-        for f in t_f :
-            L += [PsVsVDC.find_index_nearest_to_f(f,l_kernel,dt),]
-        return numpy.array(L)
-    @staticmethod
-    def gen_bigauss_input(T_f,l_kernel,dt):
-        bigauss_indexes = zeros((len(T_f),2),int)
-        for i,t_f in enumerate(T_f) :
-            bigauss_indexes[i,:] = PsVsVDC.gen_gauss_input(t_f,l_kernel,dt)
-        return bigauss_indexes
-    @staticmethod
-    def gen_flat_band_input(T_f,l_kernel,dt,rise=0.5,fall=0.5):
-        x_f = numpy.fft.rfftfreq(l_kernel , dt)
-        flat_band = zeros((len(T_f),2))
-        for i,t_f in enumerate(T_f) :
-            cdn_0  = all( x-rise > x_f[0] for x in t_f )
-            cdn_1  = all( x+fall > x_f[-1] for x in t_f )
-            if not(cdn_0 and cdn_1):
-                raise Exception('Outside frequencie range')
-            flat_band[i,:] = numpy.array(t_f)
-        return flat_band , rise , fall
-    @staticmethod
     def Wave_function_of_f_normalization(Y,df):
+        """
+            Note that betas are given to TimeQuad c++ class are 
+            normalized internally in construction and are accessible
+            through TimeQuad's attributes.
+            This function is for conveniance.
+        """
         sum = sqrt( 2*df*(numpy.square(numpy.abs(Y))).sum() )
         return Y/(sum)
     @staticmethod
@@ -1286,9 +1508,9 @@ class PsVsVDC(Tunnel_junction):
         Y = empty( l_hc , dtype = complex , order='C') 
         x_f = numpy.fft.rfftfreq(l_kernel , dt)
         for i in range( l_hc ) :
-            Y[i] =  PsVsVDC.Gaussian ( x_f[i] , f , df ) 
+            Y[i] =  Quads.Gaussian ( x_f[i] , f , df ) 
         Delta_f = x_f[1]-x_f[0]
-        Y = PsVsVDC.Wave_function_of_f_normalization(Y,Delta_f)
+        Y = Quads.Wave_function_of_f_normalization(Y,Delta_f)
         return Y 
     @staticmethod
     def _Bi_Gaussian_filter_normalized(f1,f2,df1,df2,l_kernel,dt) :
@@ -1296,99 +1518,175 @@ class PsVsVDC(Tunnel_junction):
         Y = empty( l_hc , dtype = complex , order='C') 
         x_f = numpy.fft.rfftfreq(l_kernel , dt)
         for i in range( l_hc ) :
-            Y[i] =  (df1*sqrt(2.0*pi))*PsVsVDC.Gaussian ( x_f[i] , f1 , df1 ) + (df2*sqrt(2.0*pi))*PsVsVDC.Gaussian(x_f[i] , f2 , df2) 
+            Y[i] =  (df1*sqrt(2.0*pi))*Quads.Gaussian ( x_f[i] , f1 , df1 ) + (df2*sqrt(2.0*pi))*Quads.Gaussian(x_f[i] , f2 , df2) 
         Delta_f = (x_f[1]-x_f[0])    
-        Y = PsVsVDC.Wave_function_of_f_normalization(Y,Delta_f)
+        Y = Quads.Wave_function_of_f_normalization(Y,Delta_f)
         return Y   
     @staticmethod
-    def _concatenate_Filters(Filters_gauss,Filters_bigauss,Filter_flat_band):
-        if  ((Filters_gauss.size==0)and(Filter_flat_band==0)): 
-            return Filters_bigauss 
-        elif ((Filters_bigauss.size==0)and(Filter_flat_band==0)):
-            return Filters_gauss 
-        elif ((Filters_bigauss.size==0)and(Filters_gauss.size==0)):
-            return Filter_flat_band 
-        else :
-            return numpy.concatenate( (Filters_gauss,Filters_bigauss,Filter_flat_band), axis = 0 ) 
-    @staticmethod
-    def _concatenate_fs(fs_gauss,fs_bigauss,fs_flat_band):
-        fs_shape = (fs_gauss.shape[0] + fs_bigauss.shape[0] + fs_flat_band.shape[0] ,2) 
-        fs = zeros(fs_shape)
-        fs[                         :fs_gauss.shape[0]                  :   ,0] = fs_gauss 
-        fs[fs_gauss.shape[0]        :fs_gauss.shape[0]+fs_gauss.shape[0]:   ,:] = fs_bigauss 
-        fs[-fs_flat_band.shape[0]   :                                       ,0] = fs_flat_band 
-        return fs 
-    @staticmethod
-    def _gen_gauss_Filters(l_kernel,dt,gauss_indexes,df):
-        if gauss_indexes.size == 0 :
-            return array([]),array([]),[]
-        fs = numpy.fft.rfftfreq(l_kernel,dt)[gauss_indexes]
-        labels = []
-        Filters = empty( (len(gauss_indexes),l_kernel//2+1) , dtype=complex , order='C' ) 
-        for i,f in enumerate(fs) :
-            Filters[i,:] = PsVsVDC.Gaussian_filter_normalized( f , df , l_kernel, dt ) 
-            label = "{:0.1f} \pm {:0.1f}".format(f, df)
-            labels.append(label)
-        return Filters , fs , labels    
-    @staticmethod
-    def _gen_bigauss_Filters(l_kernel,dt,bigauss_indexes,df):
-        """
-            bigauss_indexes is a n by 2 array
-        """
-        if bigauss_indexes.size ==0 :
-            return array([]),array([]), []
-        if bigauss_indexes.shape[1] !=2 :
-            raise Exception('bigauss_indexes needs to be n by 2.')
-        fs = zeros(bigauss_indexes.shape)
-        fs[:,0] = numpy.fft.rfftfreq(l_kernel,dt)[bigauss_indexes[:,0]]
-        fs[:,1] = numpy.fft.rfftfreq(l_kernel,dt)[bigauss_indexes[:,1]]
-        labels = []
-        Filters = empty( (bigauss_indexes.shape[0],l_kernel//2+1) , dtype=complex , order='C' ) 
-        for i,f in enumerate(fs) :
-            Filters[i,:] = PsVsVDC._Bi_Gaussian_filter_normalized(f[0],f[1],df,df,l_kernel,dt) 
-            label = "{:0.1f}&{:0.1f} \pm {:0.1f}".format(f[0],f[1],df)
-            labels.append(label)
-        return Filters , fs , labels 
-    @staticmethod
-    def _gen_flat_band(l_hc,dt,flat_band,rise,fall):
-        # rise    = 0.5    # size of the transition for the edge of the filter in GHz
-        if flat_band.size ==0 :
-            return array([]),array([]),[]
-        fs          = zeros(flat_band.shape[0])
-        labels      = []
-        Filters     = empty( (flat_band.shape[0],l_hc),dtype=complex,order='C' ) 
-        for i,flat in enumerate(flat_band) :
-            fs[i]           = (flat[0]+flat[1])/2.0 
-            label           = "{:0.1f}-{:0.1f}".format(flat[0], flat[1]) 
-            labels.append(label)    
-            Filters[i,:]    = TimeQuad_uint64_t.compute_flat_band (l_hc,dt,flat[0]-rise,flat[0],flat[1],flat[1]+fall) 
-        return Filters , fs , labels       
+    def _concatenate_Filters(*args):
+        t = tuple()
+        for arg in args :
+            if not (arg.size==0) :
+                t += (arg,)
+        return numpy.concatenate( t, axis = 0 ) 
     def _init_TimeQuad(self):
         self._X       = TimeQuad_uint64_t(self._R_tl,self._dt,self._l_data,self._kernel_conf,self._Filters,self._g,self._alpha,self._l_fft,self._n_threads)
         self.betas   = self._X.betas()
         self.filters = self._X.filters()
         self.ks      = self._X.ks()
         self.qs      = self._X.quads()[0,:,:]
-        self._data   = self._gz.get() # int16
-        self._X.execute( self._data )
-    def _init_Histograms(self):
-        l_Vdc = len(self._compute_Vdc_experimental(self.Vdc))
+        self._data_gz   = self._gz.get() # int16
+        self._X.execute( self._data_gz )
+    ###################
+    # Plots Utilities #
+    ###################
+    @staticmethod
+    def _plot_Filters( Filters , labels, ax , l_dft , dt ):
+        freqs = numpy.fft.rfftfreq(l_dft,dt) 
+        for i,f in enumerate(Filters) :
+            ax.plot( freqs , f , label = labels[i] , marker='o') 
+        ax.set_xlabel(" GHz ")
+        ax.legend()
+    @staticmethod
+    def _plot_Kernels(ts,ks,labels,ax,dt):   
+        for j in range(ks.shape[1]):
+            color = next(ax._get_lines.prop_cycler)['color']
+            for k in range(ks.shape[0]):
+                if k==0:
+                    ax.plot( ts , ks[k,j,:] , color=color , label = labels[j] ) 
+                else :
+                    ax.plot( ts , ks[k,j,:] , color=color , linestyle='--' ) 
+        ax.set_xlabel("ns")
+        ax.legend()
+    @staticmethod
+    def _plot_Kernels_FFT(freqs,ks,labels,ax,dt):    
+        for j in range(ks.shape[1]):
+            color = next(ax._get_lines.prop_cycler)['color']
+            for k in range(ks.shape[0]):
+                if k==0:
+                    ax.plot( freqs, absolute(rfft(ks[k,j,:])) , color=color , label = labels[j]) 
+                else :
+                    ax.plot( freqs, absolute(rfft(ks[k,j,:])) , color=color , linestyle='--'  ) 
+        ax.set_xlabel("GHz")
+        ax.legend()
+    ###########
+    # Figures #
+    ###########    
+    # Meant for analysis
+    def fig_filters(self):
+        fig, ax = subplots(1,1)
+        self._plot_Filters(self.filters,self._labels,ax,l_dft = self._l_kernel, dt=self._dt)
+        ax.set_title('betas*1/g(f)')
+        ax.set_ylabel('[GHz^-1/2]/[~]')
+        return fig  
+    def fig_betas(self):
+        fig, ax = subplots(1,1)
+        self._plot_Filters(self.betas,self._labels,ax,l_dft = self._l_kernel, dt=self._dt)
+        ax.set_title('beta(f)')
+        ax.set_ylabel('[GHz^-1/2]')
+        return fig
+    def fig_kernels_t(self):
+        fig, axs = subplots(1,1)
+        ts = self._gen_t_abscisse() 
+        Quads._plot_Kernels(ts,self.ks,self._labels,axs,self._dt)
+        fig.suptitle('half-normalized kernels')
+        return fig 
+    def fig_Kernels_f(self):
+        fig, axs = subplots(1,1)
+        freqs = self._gen_f_abscisse()
+        Quads._plot_Kernels_FFT(freqs,self.ks,self._labels,axs,dt)
+        fig.suptitle('half-normalized kernels')
+        return fig 
+    ################################
+    # Privates/Should never change #
+    ################################
+
+class nsVsVDC(Quads):
+    """
+        Parent(s) : Quads
         
-        Hs_shape = (l_Vdc , self._n_kernels )
-        self.Hs = r_[[Histogram_uint64_t_double(nb_of_bin,n_threads,max) for i in range(prod(Hs_shape))]] 
-        self.Hs.shape = Hs_shape 
-        self._H_x = self.Hs[0,0].abscisse(max)  #Should be made static and called static 
-        for j in range (l_Vdc):
-            for i in range(self._n_kernels):
-                self.Hs[j,i].accumulate( self.qs[i,:]) # dummy data
-    def _reset_Hs(self):
-        l_Vdc = len(self._compute_Vdc_experimental(self.Vdc))
-        for j in range (l_Vdc):
-            for i in range(self._n_kernels):
-                self.Hs[j,i].reset()
-    def _compute_Vdc_core_loop(self,Vdc):
-        Vdc_loop = self._compute_Vdc_experimental(Vdc)
-        return self._compute_next_Vdc(Vdc_loop)
+        Important variables :
+            self.moments 
+                shape = (4,n_kernels,l_Vdc)
+                1st index meaning
+                    0 : <q>
+                    1 : <q**2>
+                    2 : <q**4>
+                    3 : <q**8>
+            self.ns
+                shape = (4,n_kernels,cumulants_sample.shape[-1])
+                1st index meaning
+                    0 : <n>
+                    1 : <n**2>
+                    2 : <dn**2>
+                    3 : fano
+        Important objects :
+            self.Hs
+                shape = ( n_kernels,l_Vdc )
+        Todos : 
+        Bugs :
+    """
+    __version__     = { 'nsVsVDC'  : 0.2 }
+    __version__.update(Quads.__version__)
+    """
+        Public
+    """
+    @staticmethod
+    def gen_meta_info(circuit_info,compute_info,aqc_info,quads_info,hist_info):
+        meta_info = super(nsVsVDC,nsVsVDC).gen_meta_info(circuit_info,compute_info,aqc_info,quads_info)
+        meta_info['hist_info'] = hist_info
+        return meta_info
+    @staticmethod
+    def gen_circuit_info(R_jct,R_1M,R_tl,g,V_th):
+        circuit_info = super(nsVsVDC,nsVsVDC).gen_circuit_info(R_jct,R_1M,R_tl,g)
+        circuit_info['V_th'] = V_th
+        return circuit_info
+    @staticmethod
+    def gen_hist_info(nb_of_bin,max):
+        return {'nb_of_bin':nb_of_bin,'max':max}
+    """
+        Private
+    """
+    def _set_meta_info(self,meta_info):
+        super(nsVsVDC,self)._set_meta_info(meta_info)
+        self._hist_info  =   meta_info['hist_info']
+    def _build_attributes(self):
+        super(nsVsVDC,self)._build_attributes()
+        self._build_from_hist       (self._hist_info)
+    def _build_from_circuit(self,circuit_info):
+        super(nsVsVDC,self)._build_from_circuit(circuit_info)
+        self._V_th  = circuit_info['V_th'] # R_jct , R_1M , R_tl, g ,V_th
+    def _build_from_hist(self,hist_info):
+        self._nb_of_bin         =   int(hist_info['nb_of_bin'])
+        self._max               =   hist_info['max']  
+    def _init_objects(self):
+        super(nsVsVDC,self)._init_objects()
+        self._init_Histograms()
+    #######################
+    # Extra Gets and sets #
+    #######################
+    #############
+    # Utilities #
+    #############   
+    def _init_Histograms(self):
+        l_Vdc           = len(self._compute_Vdc_experimental(self.Vdc))
+        max             = self._max
+        n_threads       = self._n_threads
+        nb_of_bin       = self._nb_of_bin
+        n_kernels       = self._n_kernels
+        
+        Hs_shape        = (n_kernels , l_Vdc )
+        self.Hs         = r_[[Histogram_uint64_t_double(nb_of_bin,n_threads,max) for i in range(prod(Hs_shape))]] 
+        self.Hs.shape   = Hs_shape 
+        self._H_x       = self.Hs[0,0].abscisse(max)  #Should be made static and called static
+        # for j in range (l_Vdc):
+            # for i in range(n_kernels):
+                # self.Hs[j,i].accumulate( self.qs[i,:]) # dummy data
+    # def _reset_Hs(self):
+        # l_Vdc = len(self._compute_Vdc_experimental(self.Vdc))
+        # for j in range (l_Vdc):
+            # for i in range(self._n_kernels):
+                # self.Hs[j,i].reset()
     def _compute_moments(self):
         """
             Ordre>
@@ -1401,23 +1699,22 @@ class PsVsVDC(Tunnel_junction):
         n_threads = self._n_threads
         l_Vdc = len(self._compute_Vdc_experimental(self.Vdc))
         moments = numpy.zeros((4,n_kernels,l_Vdc),dtype=float) 
-        
         Hs  = self.Hs
         H_x = self._H_x
-        
-        n_total = int( Hs[0,0].moment_no_clip(bins=H_x,exp=0,n_total=1,n_threads=n_threads) )
         for i in range(n_kernels) :
             for j in range(len(self._Vdc_exp)) :
-                moments[0,i,j] = Hs[j,i].moment_no_clip(bins=H_x,exp=1,n_total=n_total,n_threads=n_threads)
-                moments[1,i,j] = Hs[j,i].moment_no_clip(bins=H_x,exp=2,n_total=n_total,n_threads=n_threads)
-                moments[2,i,j] = Hs[j,i].moment_no_clip(bins=H_x,exp=4,n_total=n_total,n_threads=n_threads)
-                moments[3,i,j] = Hs[j,i].moment_no_clip(bins=H_x,exp=8,n_total=n_total,n_threads=n_threads)
+                n_total   = int( Hs[i,j].moment_no_clip(bins=H_x,exp=0,n_total=1        ,n_threads=n_threads) )
+                moments[0,i,j] = Hs[i,j].moment_no_clip(bins=H_x,exp=1,n_total=n_total  ,n_threads=n_threads)
+                moments[1,i,j] = Hs[i,j].moment_no_clip(bins=H_x,exp=2,n_total=n_total  ,n_threads=n_threads)
+                moments[2,i,j] = Hs[i,j].moment_no_clip(bins=H_x,exp=4,n_total=n_total  ,n_threads=n_threads)
+                moments[3,i,j] = Hs[i,j].moment_no_clip(bins=H_x,exp=8,n_total=n_total  ,n_threads=n_threads)
                 # Hs[j,i].reset()
         return moments
     @staticmethod  
     def _compute_errors(moments,n):
-        shape = moments.shape
-        errors = numpy.zeros((shape[0]-1,shape[1],shape[2]),dtype=float) 
+        shape = (moments.shape[0]-1,)
+        shape += moments.shape[1:]
+        errors = numpy.zeros(shape,dtype=float) 
         errors[0,:,:] = Experiment.SE(moments[1,:,:],moments[0,:,:],n)
         errors[1,:,:] = Experiment.SE(moments[2,:,:],moments[1,:,:],n)
         errors[2,:,:] = Experiment.SE(moments[3,:,:],moments[2,:,:],n)
@@ -1425,31 +1722,21 @@ class PsVsVDC(Tunnel_junction):
     #################
     # Loop behavior #
     #################
-    def _all_loop_open(self):
-        self._reset_Hs()
-    def _repetition_loop_start(self,n):
-        Vdc_0   =   self._compute_Vdc_experimental(self.Vdc)[0]
-        print 'Preparing loop : Vdc = {:0.1F}'.format(Vdc_0)
-        self._yoko.set_and_wait(Vdc_0) # 1st Vdc
-    def _core_loop_iterator(self):
-        Vdc = self._compute_Vdc_core_loop(self.Vdc)
-        return Experiment._super_enumerate(Vdc)
+    # def _all_loop_open(self): # Dont need for now cause im not doing the initial data calculations anymore
+        # self._reset_Hs()
     def _loop_core(self,index_tuple,condition_tuple):
         """
             Works conditionnaly to the computing being slower than 0.4 sec
         """
         j,          = index_tuple     
         vdc_next,   = condition_tuple   
-        self._data  = self._gz.get() # int16 
+        self._data_gz  = self._gz.get() # int16 
         self._yoko.set(vdc_next)
         self._log.event(0)
-        self._X.execute(self._data)
+        self._X.execute(self._data_gz)
         for i in range(self._n_kernels):
-            self.Hs[j,i].accumulate( self.qs[i,:])
+            self.Hs[i,j].accumulate( self.qs[i,:])
         self._log.event(1)
-    def _all_loop_close(self):
-        print 'closing loop : Vdc = {:0.1F}'.format(0)
-        self._yoko.set(0)  
     ######################
     # Analysis Utilities #
     ######################
@@ -1465,38 +1752,21 @@ class PsVsVDC(Tunnel_junction):
         return moments_corrected 
     @staticmethod
     def _compute_cumulants(moments):
-        cumulants           = numpy.zeros( moments.shape ,dtype=float)
+        shape = (moments.shape[0]-1,)
+        shape += moments.shape[1:]
+        cumulants           = numpy.zeros( shape ,dtype=float)
         cumulants[0,:,:]    = moments[0,:,:] 
         cumulants[1,:,:]    = moments[1,:,:] 
         cumulants[2,:,:]    = moments[2,:,:]     - 3.0*(moments[1,:,:] + 0.5 )**2  # <p**4> -3 <p**2> **2
         return cumulants
     @staticmethod
     def _compute_cumulants_std(moments,moments_std):
-        cumulants_std           = numpy.zeros( moments.shape ,dtype=float)
+        shape = moments_std.shape
+        cumulants_std           = numpy.zeros( shape ,dtype=float)
         cumulants_std[0,:,:]    = moments_std[0,:,:] 
         cumulants_std[1,:,:]    = moments_std[1,:,:] 
         cumulants_std[2,:,:]    = moments_std[2,:,:] - 6.0*(moments[1,:,:] + 0.5 )*(moments_std[1,:,:])  # <p**4> -3 <p**2> **2
         return cumulants_std
-    def _compute_cumulants_sample(self,cumulants):
-        if self._interlacing :
-            ref =  cumulants[:,::2]
-            cdn =  cumulants[:,1::2]
-            cumulants_sample = cdn - ref
-        else :
-            ref =  cumulants[:,:,0]
-            cdn =  cumulants[:,:,1::]
-            cumulants_sample = cdn - ref[:,:,None]
-        return cumulants_sample
-    def _compute_cumulants_sample_std(self,cumulants_std):
-        if self._interlacing :
-            ref =  cumulants_std[:,::2]
-            cdn =  cumulants_std[:,1::2]
-            cumulants_sample = cdn + ref
-        else :
-            ref =  cumulants_std[:,:,0]
-            cdn =  cumulants_std[:,:,1::]
-            cumulants_sample = cdn + ref[:,:,None]
-        return cumulants_sample
     @staticmethod
     def _compute_C4(cumulants_sample):
         C4 = numpy.empty( cumulants_sample[0,:,:].shape ,dtype=float) 
@@ -1508,7 +1778,7 @@ class PsVsVDC(Tunnel_junction):
             0 : <n>
             1 : <n**2>
             2 : <dn**2>
-            3 : fano
+            3 
         """
         n_kernels   = cumulants_sample.shape[1]
         ns          = numpy.empty((4,n_kernels,cumulants_sample.shape[-1]),dtype=float)
@@ -1524,23 +1794,26 @@ class PsVsVDC(Tunnel_junction):
         n  = n[:,V_jct>V_th] 
         fit_params = zeros((2,n.shape[0])) 
         for i,(nn,cc) in enumerate(zip(n,C4)) :
-            fit_params[:,i] = numpy.polyfit(transpose(nn),transpose(cc),1)
+            try :
+                fit_params[:,i] = numpy.polyfit(transpose(nn),transpose(cc),1)
+            except numpy.linalg.LinAlgError :
+                pass
         return fit_params 
     @staticmethod
     def _slope_of_linear_fit_of_C4(n,C4,V_jct,V_th):
-        return PsVsVDC._linear_fit_of_C4(n,C4,V_jct,V_th)[0,:] 
+        return nsVsVDC._linear_fit_of_C4(n,C4,V_jct,V_th)[0,:] 
     @staticmethod
     def _gen_C4_fit_vector(n,C4,V_jct,V_th):
-        fit_params = PsVsVDC._linear_fit_of_C4(n,C4,V_jct,V_th)
+        fit_params = nsVsVDC._linear_fit_of_C4(n,C4,V_jct,V_th)
         a = fit_params[0,:]
         b = fit_params[1,:]
         return n*a[:,None] + b[:,None] 
     @staticmethod
     def _compute_ns_corrected(ns,cumulants_sample,Vdc_source,R_jct,R_1M,V_th):
-        C4      = PsVsVDC._compute_C4(cumulants_sample) 
-        V_jct   = PsVsVDC._compute_Vdc_jct(Vdc_source,R_jct,R_1M)
-        n = cumulants_sample[1,:,:]
-        a = PsVsVDC._slope_of_linear_fit_of_C4(n,C4,V_jct,V_th)
+        C4      = nsVsVDC._compute_C4(cumulants_sample) 
+        V_jct   = Tunnel_junction._compute_Vdc_jct(Vdc_source,R_jct,R_1M)
+        n       = cumulants_sample[1,:,:]
+        a       = nsVsVDC._slope_of_linear_fit_of_C4(n,C4,V_jct,V_th)
         ns_corr = numpy.empty((ns.shape),dtype=float)    
         ns_corr[0,:,:] = n 
         ns_corr[1,:,:] = (2.0/3.0)*(cumulants_sample[2,:,:]- a[:,None]*n) + 2.0*n**2 - n 
@@ -1599,35 +1872,6 @@ class PsVsVDC(Tunnel_junction):
     ###################
     # Plots Utilities #
     ###################
-    @staticmethod
-    def _plot_Filters( Filters , labels, ax , l_dft , dt ):
-        freqs = numpy.fft.rfftfreq(l_dft,dt) 
-        for i,f in enumerate(Filters) :
-            ax.plot( freqs , f , label = labels[i] , marker='o') 
-        ax.set_xlabel(" GHz ")
-        ax.legend()
-    @staticmethod
-    def _plot_Kernels(ts,ks,labels,ax,dt):   
-        for j in range(ks.shape[1]):
-            color = next(ax._get_lines.prop_cycler)['color']
-            for k in range(ks.shape[0]):
-                if k==0:
-                    ax.plot( ts , ks[k,j,:] , color=color , label = labels[j] ) 
-                else :
-                    ax.plot( ts , ks[k,j,:] , color=color , linestyle='--' ) 
-        ax.set_xlabel("ns")
-        ax.legend()
-    @staticmethod
-    def _plot_Kernels_FFT(freqs,ks,labels,ax,dt):    
-        for j in range(ks.shape[1]):
-            color = next(ax._get_lines.prop_cycler)['color']
-            for k in range(ks.shape[0]):
-                if k==0:
-                    ax.plot( freqs, absolute(rfft(ks[k,j,:])) , color=color , label = labels[j]) 
-                else :
-                    ax.plot( freqs, absolute(rfft(ks[k,j,:])) , color=color , linestyle='--'  ) 
-        ax.set_xlabel("GHz")
-        ax.legend()
     @staticmethod
     def _plot_n(I_jct,ns,ns_std,kernel_index,axs,errorbar=True,**plot_kw):
         if errorbar:
@@ -1717,7 +1961,6 @@ class PsVsVDC(Tunnel_junction):
                 ax.plot(self.Hs[v,k].get())
     def _fig_q(self,kernel_slice=slice(None)):
         labels          = self._labels
-        fs              = self._fs
         I_jct           = self._compute_I_jct(self._Vdc_exp,self._R_1M)
         moments         = self.moments
         plot_kw = {'linestyle':'-'}
@@ -1732,7 +1975,6 @@ class PsVsVDC(Tunnel_junction):
         axs.set_xlabel('I_jct [uA]')
     def _fig_q2(self,kernel_slice=slice(None)):
         labels          = self._labels
-        fs              = self._fs
         I_jct           = self._compute_I_jct(self._Vdc_exp,self._R_1M)
         moments         = self.moments
         plot_kw = {'linestyle':'-'}
@@ -1747,7 +1989,6 @@ class PsVsVDC(Tunnel_junction):
         axs.set_xlabel('I_jct [uA]')
     def _fig_q4(self,kernel_slice=slice(None)):
         labels          = self._labels
-        fs              = self._fs
         I_jct           = self._compute_I_jct(self._Vdc_exp,self._R_1M)
         moments         = self.moments
         plot_kw = {'linestyle':'-'}
@@ -1762,7 +2003,6 @@ class PsVsVDC(Tunnel_junction):
         axs.set_xlabel('I_jct [uA]')
     def _fig_q8(self,kernel_slice=slice(None)):
         labels          = self._labels
-        fs              = self._fs
         I_jct           = self._compute_I_jct(self._Vdc_exp,self._R_1M)
         moments         = self.moments
         plot_kw = {'linestyle':'-'}
@@ -1776,45 +2016,19 @@ class PsVsVDC(Tunnel_junction):
         axs.set_ylabel('')
         axs.set_xlabel('I_jct [uA]')      
     # Meant for analysis
-    def fig_filters(self):
-        fig, ax = subplots(1,1)
-        self._plot_Filters(self.filters,self._labels,ax,l_dft = self._l_kernel, dt=self._dt)
-        ax.set_title('betas*1/g(f)')
-        ax.set_ylabel('[GHz^-1/2]/[~]')
-        return fig  
-    def fig_betas(self):
-        fig, ax = subplots(1,1)
-        self._plot_Filters(self.betas,self._labels,ax,l_dft = self._l_kernel, dt=self._dt)
-        ax.set_title('beta(f)')
-        ax.set_ylabel('[GHz^-1/2]')
-        return fig
-    def fig_kernels_t(self):
-        fig, axs = subplots(1,1)
-        ts = self._gen_t_abscisse() 
-        PsVsVDC._plot_Kernels(ts,self.ks,self._labels,axs,self._dt)
-        fig.suptitle('half-normalized kernels')
-        return fig 
-    def fig_Kernels_f(self):
-        fig, axs = subplots(1,1)
-        freqs = self._gen_f_abscisse()
-        PsVsVDC._plot_Kernels_FFT(freqs,self.ks,self._labels,axs,dt)
-        fig.suptitle('half-normalized kernels')
-        return fig 
-    def fig_n_no_fs(self,gauss_slice=slice(None)):
+    def fig_n_no_fs(self):
         """
             Filters gaussien / f_0
         """
-        if gauss_slice == slice(None):
-            gauss_slice     = self._gauss_slice
-        labels          = self._labels
-        ns              = self.ns
-        fs              = self._fs
+        labels          = self._filter_info['gauss']['labels']
+        ns              = self.ns_corrected
+        fs              = self._filter_info['gauss']['fs']
         I_jct           = self._compute_I_jct(self._Vdc_antisym,self._R_1M)
         plot_kw     = {'linestyle':'-'}
         fig , axs = subplots(1,1)
-        for i, label in enumerate(labels[gauss_slice]):
+        for i, label in enumerate(labels):
             plot_kw['label'] = label 
-            axs.plot(I_jct*10**6,ns[0,i,:]*fs[i,0],**plot_kw)
+            axs.plot(I_jct*10**6,ns[0,i,:]*fs[i],**plot_kw)
         axs.legend()
         axs.title.set_text('<n>/f0')
         axs.set_xlabel('Vdc source [V]')
@@ -1824,9 +2038,8 @@ class PsVsVDC(Tunnel_junction):
             Code commun pour les figures <n>,<n**2>,<dn**2>
         """
         labels          = self._labels
-        fs              = self._fs
         I_jct           = self._compute_I_jct(self._Vdc_antisym,self._R_1M)
-        ns              = self.ns
+        ns              = self.ns_corrected
         ns_std          = self.ns_std
         plot_kw = {'linestyle':'-'}
         fig , axs = subplots(1,1)
@@ -1839,21 +2052,21 @@ class PsVsVDC(Tunnel_junction):
         """
              <n>
         """
-        plot_fct = PsVsVDC._plot_n
+        plot_fct = nsVsVDC._plot_n
         fig = self._fig_ns(kernel_slice,plot_fct)
         return fig 
     def fig_n2(self,kernel_slice=slice(None)):
         """
             <n^2>
         """
-        plot_fct = PsVsVDC._plot_n2
+        plot_fct = nsVsVDC._plot_n2
         fig = self._fig_ns(kernel_slice,plot_fct)
         return fig 
     def fig_dn2(self,kernel_slice=slice(None)):
         """
             Var n
         """
-        plot_fct = PsVsVDC._plot_dn2
+        plot_fct = nsVsVDC._plot_dn2
         fig = self._fig_ns(kernel_slice,plot_fct)
         return fig 
     def _fig_ns_vs_n(self,kernel_slice,plot_fct):
@@ -1861,8 +2074,7 @@ class PsVsVDC(Tunnel_junction):
             Code commun pour les figures dn2_vs_n, diff_n_0_2_dn2
         """
         labels          = self._labels
-        fs              = self._fs
-        ns              = self.ns
+        ns              = self.ns_corrected
         ns_std          = self.ns_std
         plot_kw = {'linestyle':'-'}
         fig , axs = subplots(2,len(labels)/2 + len(labels)%2 )
@@ -1875,14 +2087,14 @@ class PsVsVDC(Tunnel_junction):
         """
             Var n vs n avec n(n+1)
         """
-        plot_fct = PsVsVDC._plot_dn2_vs_n
+        plot_fct = nsVsVDC._plot_dn2_vs_n
         fig = self._fig_ns_vs_n(kernel_slice,plot_fct)
         return fig 
     def fig_diff_n_0_2_dn2(self,kernel_slice=slice(None)):
         """
             Difference entre Var n et n(n+1)
         """
-        plot_fct = PsVsVDC._plot_diff_n_0_2_dn2
+        plot_fct = nsVsVDC._plot_diff_n_0_2_dn2
         fig = self._fig_ns_vs_n(kernel_slice,plot_fct)
         return fig 
     def fig_C4(self,kernel_slice=slice(None)):
@@ -1890,7 +2102,6 @@ class PsVsVDC(Tunnel_junction):
             C4 avant correction 
         """ 
         labels          = self._labels
-        fs              = self._fs
         I_jct           = self._compute_I_jct(self._Vdc_antisym,self._R_1M)
         C4              = self.C4
         plot_kw = {'linestyle':'-'}
@@ -1904,7 +2115,6 @@ class PsVsVDC(Tunnel_junction):
         return fig 
     def fig_C4_and_fit_C4(self,kernel_slice=slice(None)):
         labels          = self._labels
-        fs              = self._fs
         V_jct           = self._compute_Vdc_jct(self._Vdc_antisym,self._R_jct,self._R_1M)
         C4              = self.C4
         n               = self.ns[0,:,:] 
@@ -1912,7 +2122,7 @@ class PsVsVDC(Tunnel_junction):
         plot_kw_0 = {'linestyle':'-','marker':'*'}
         plot_kw_1 = {'linestyle':'dotted'}
         fig , axs = subplots(1,1)
-        fit_C4 = PsVsVDC._gen_C4_fit_vector(n,C4,V_jct,V_th)
+        fit_C4 = nsVsVDC._gen_C4_fit_vector(n,C4,V_jct,V_th)
         for i, label in enumerate(labels[kernel_slice]):
             color = next(axs._get_lines.prop_cycler)['color']
             plot_kw_0['label'] = label 
@@ -1928,59 +2138,439 @@ class PsVsVDC(Tunnel_junction):
         """
             Somme des n
         """
-        gauss_slice     = self._gauss_slice
-        
         labels          = self._labels
-        fs              = self._fs
+        labels_gauss    = self._filter_info['gauss']['labels']
+        fs              = self._filter_info['gauss']['fs']
         I_jct           = self._compute_I_jct(self._Vdc_antisym,self._R_1M)
-        ns              = self.ns
+        ns              = self.ns_corrected
         ns_std          = self.ns_std
         plot_kw = {'linestyle':'-'}
         plot_kw_1 = {'linestyle':'--','marker':'*'}
         fig , axs = subplots(1,1)
         for i, label in enumerate(labels[kernel_slice]):
             plot_kw['label'] = label 
-            PsVsVDC._plot_n(I_jct,ns,ns_std,i,axs,errorbar=False,**plot_kw)
+            nsVsVDC._plot_n(I_jct,ns,ns_std,i,axs,errorbar=False,**plot_kw)
         
-        for i, label in enumerate(labels[gauss_slice]):
+        for i, label in enumerate(labels_gauss):
             for j in range(i):
-                plot_kw_1['label'] = '1/2({:.1f}+{:.1f})'.format(fs[i,0],fs[j,0]) 
-                PsVsVDC._plot_sum_of_n(I_jct,ns,ns_std,i,j,axs,errorbar=False,**plot_kw_1)
+                plot_kw_1['label'] = '1/2({:.1f}+{:.1f})'.format(fs[i],fs[j]) 
+                nsVsVDC._plot_sum_of_n(I_jct,ns,ns_std,i,j,axs,errorbar=False,**plot_kw_1)
         axs.legend()
         return fig 
     def fig_sum_of_Var_ns(self,kernel_slice=slice(None)):
         """
             Somme des Var n
         """
-        gauss_slice     = self._gauss_slice
+        gauss_slice     = self._filter_info['gauss']['slice']
         
         labels          = self._labels
-        fs              = self._fs
+        labels_gauss    = self._filter_info['gauss']['labels']
+        fs              = self._filter_info['gauss']['fs']
         I_jct           = self._compute_I_jct(self._Vdc_antisym,self._R_1M)
-        ns              = self.ns
+        ns              = self.ns_corrected
         ns_std          = self.ns_std
         plot_kw = {'linestyle':'-'}
         plot_kw_1 = {'linestyle':'--','marker':'*'}
         fig , axs = subplots(1,1)
         for i, label in enumerate(labels[kernel_slice]):
             plot_kw['label'] = label 
-            PsVsVDC._plot_dn2(I_jct,ns,ns_std,i,axs,errorbar=False,**plot_kw)
-        for i, label in enumerate(labels[gauss_slice]):
+            nsVsVDC._plot_dn2(I_jct,ns,ns_std,i,axs,errorbar=False,**plot_kw)
+        for i, label in enumerate(labels_gauss):
             for j in range(i):
-                plot_kw_1['label'] = '1/4({:.1f}+{:.1f})'.format(fs[i,0],fs[j,0]) 
-                PsVsVDC._plot_sum_of_dn2(I_jct,ns,ns_std,i,j,axs,errorbar=False,**plot_kw_1)
+                plot_kw_1['label'] = '1/4({:.1f}+{:.1f})'.format(fs[i],fs[j]) 
+                nsVsVDC._plot_sum_of_dn2(I_jct,ns,ns_std,i,j,axs,errorbar=False,**plot_kw_1)
         axs.legend()
         return fig 
     ################################
     # Privates/Should never change #
     ################################
 
-
-
-
-
-
-
-
-
-
+class Comm_measure(nsVsVDC):
+    """
+        Add behavior ontop of nsVsVDC to measure directly [a,adag] = k
+        
+        compositions and combinations are defined in Quads and are simply a way to follow the 
+        combinations of filter together in order to compute moments of the form
+        < x0 x1 > wher xi are some values that depends on two different filters
+        
+        Parent(s) : nsVsVDC
+        
+        Important variables :
+            self.moments_2D 
+                shape = (2,n_compositions,n_combinations,l_Vdc)
+                1st index meaning
+                    0 : <q_0**2 q_1**2>
+                    1 : <q_0**4 q_1**4>
+        Important objects :
+            self.Hs_2D
+                shape = (n_compositions , n_combinations=3 , l_Vdc )
+                        
+        Todos : 
+        Bugs :
+    """
+    __version__     = {'Comm_measure': 0.1 }
+    __version__.update(nsVsVDC.__version__)
+    """
+        Public
+    """
+    @staticmethod
+    def gen_meta_info(circuit_info,compute_info,aqc_info,quads_info,hist_info,commutator_measure_info):
+        meta_info = super(Comm_measure,Comm_measure).gen_meta_info(circuit_info,compute_info,aqc_info,quads_info,hist_info)
+        meta_info['commutator_measure_info'] = commutator_measure_info
+        return meta_info
+    @staticmethod
+    def gen_hist_info(nb_of_bin,nb_of_2D_bin,max):
+        hist_info = super(Comm_measure,Comm_measure).gen_hist_info(nb_of_bin,max)
+        hist_info['nb_of_2D_bin'] = nb_of_2D_bin
+        return hist_info
+    @staticmethod
+    def gen_commutator_measure_info(filters_info,filter_type_indexes,filter_indexes):
+        """
+            todos :
+                - make it work for filter_type containing strings ?
+            Outputs a list of triplets for the computation of n0,n1,N terms
+            filter_type_indexes is a      3 arrray like object that tell which filter type to associate to n0,n1 and N
+            filter_indexes      is a m by 3 arrray like object that tell which filter      to associate to n0,n1 and N      
+                compositions(m,n=2,l=3) 
+                    m : index of the composition
+                    n : 0 to get the type index 1 to get the filter index
+                    l : 0,1,2 for n0,n1,N
+        """
+        filter_type_indexes = numpy.array(filter_type_indexes)
+        filter_indexes      = numpy.array(filter_indexes)
+        m = filter_indexes.shape[0]
+        compositions_shape = (m,2,filter_indexes.shape[1])
+        compositions = numpy.zeros(compositions_shape)
+        compositions[:,0,:] = filter_type_indexes               
+        compositions[:,1,:] = filter_indexes
+        compositions_indexes = Quads._gen_composition_indexes(filters_info,compositions)
+        n_combinations = 3
+        commutator_info =  {'compositions':compositions,'compositions_indexes':compositions_indexes,'n_combinations':n_combinations}
+        return commutator_info
+    @staticmethod
+    def gen_filter_type_index(*arg):
+        out = tuple()
+        def find_filter_type(s):
+            if  s =='gauss' :
+                return 0
+            elif s == 'bigauss' :
+                return 1
+            elif s == 'flatband' :
+                return 2
+            else :
+                raise Exception('Filter type doesn''t exist')
+        for s in arg:
+            out += (find_filter_type(s),)
+        return out
+    """
+        Private
+    """
+    @staticmethod
+    def _extract_commutator_measure_info(commutator_measure_info): 
+        return commutator_measure_info['compositions'],commutator_measure_info['compositions_indexes'],commutator_measure_info['n_combinations'] 
+    def _set_meta_info(self,meta_info):
+        super(Comm_measure,self)._set_meta_info(meta_info)
+        self._commutator_measure_info   =   meta_info['commutator_measure_info']
+    def _build_from_hist(self,hist_info):
+        super(Comm_measure,self)._build_from_hist(hist_info)
+        self._nb_of_2D_bin  = int(hist_info['nb_of_2D_bin'])
+    def _build_from_commutator_measure_info(self,commutator_measure_info):
+        self._comm_compositions, self._compositions_indexes, self._n_combinations = Comm_measure._extract_commutator_measure_info(commutator_measure_info)
+        self._n_compositions = self._comm_compositions.shape[0] 
+    def _build_attributes(self):
+        super(Comm_measure,self)._build_attributes()
+        self._build_from_commutator_measure_info(self._commutator_measure_info)
+    #######################
+    # Extra Gets and sets #
+    #######################
+    #############
+    # Utilities #
+    #############
+    @staticmethod
+    def gen_it_composition(commutator_info):
+        """
+            generates an iterator that goes trough the compositions
+            returns
+            i, j0,j1,j2
+            i   : composition index
+            j0  : kernel_index of the 1st element of the composition 
+            j1  : idem 2nd element
+            j2  : idem 3rd element
+        """
+        compositions_indexes    = commutator_info['compositions_indexes']
+        return enumerate(compositions_indexes)
+    class it_compo_and_combination:
+        """
+                An iterator that goes trough the different kernel combinations
+                returns
+                i,j,j0,j1
+                i   : composition index
+                j   : combination index
+                j0  : kernel_index of the 1st element of the combination pair
+                j1  : idem 2nd element
+            """
+        def __init__(self,filters_info,commutator_info):
+            compositions    = commutator_info['compositions']
+            self.is_comp    = commutator_info['compositions_indexes']
+            self.n_comp     = compositions.shape[0]
+        def _gen_it_combination(self,i):
+            index_triplet   = self.is_comp[i]
+            it              = itertools.combinations(index_triplet,2)
+            return enumerate(it)
+        def __iter__(self):
+            self.it_composition = iter(range(self.n_comp))
+            self.i              = next(self.it_composition) # 0
+            self.it_combination = self._gen_it_combination(self.i)
+            return self
+        def next(self): # python 2 and 3 compatiblity
+            return self.__next__()
+        def __next__(self):
+            try : 
+                j,(j0,j1) = next(self.it_combination)
+            except StopIteration:
+                try :
+                    self.i              = next(self.it_composition)
+                    self.it_combination = self._gen_it_combination(self.i)
+                    j,(j0,j1)           = next(self.it_combination)
+                except StopIteration :
+                    raise StopIteration # all iterations are over  
+            return self.i,j,j0,j1
+    def _init_Histograms(self):
+        super(Comm_measure,self)._init_Histograms()
+        max             = self._max
+        nb_of_2D_bin    = self._nb_of_2D_bin
+        n_threads       = self._n_threads  
+        Hs_2D_shape     = ( self._n_compositions , self._n_combinations, len(self._Vdc_exp) )
+        self.Hs_2D      = r_[[Histogram2D_uint64_t_double   (nb_of_2D_bin,n_threads,max) for i in range(prod(Hs_2D_shape))]]
+        self.Hs_2D.shape= Hs_2D_shape
+        self._H_x_2D    = self.Hs_2D[0,0,0].abscisse(max)  #Should be made static and called static
+    def _compute_moments_2D(self):
+        n_compositions  = self._n_compositions
+        n_combinations  = self._n_combinations
+        l_Vdc           = len(self._Vdc_exp)
+        max             = self._max
+        nb_of_2D_bin    = self._nb_of_2D_bin
+        n_threads       = self._n_threads
+        moments         = numpy.zeros((2,n_compositions,n_combinations,l_Vdc),dtype=float) 
+        Hs_2D           = self.Hs_2D
+        H_x_2D          = self._H_x_2D 
+        for i in range(n_compositions):
+            for j in range(n_combinations):
+                for k in range(l_Vdc) :
+                    n_total = int(     Hs_2D[i,j,k].moment_no_clip(bins=H_x_2D,exp_x=0,exp_y=0,n_total=1        ,n_threads=n_threads) )
+                    moments[0,i,j,k] = Hs_2D[i,j,k].moment_no_clip(bins=H_x_2D,exp_x=2,exp_y=2,n_total=n_total  ,n_threads=n_threads)
+                    moments[1,i,j,k] = Hs_2D[i,j,k].moment_no_clip(bins=H_x_2D,exp_x=4,exp_y=4,n_total=n_total  ,n_threads=n_threads)
+        return moments       
+    @staticmethod  
+    def _compute_2D_errors(moments,n):
+        shape = (moments.shape[0]-1,)
+        shape += moments.shape[1:]
+        errors = numpy.zeros(shape,dtype=float) 
+        errors[0,:,:,:] = Experiment.SE(moments[1,:,:,:],moments[0,:,:,:],n)
+        return errors
+    #################
+    # Loop behavior #
+    #################
+    def _loop_core(self,index_tuple,condition_tuple):
+        """
+            Works conditionnaly to the computing being slower than 0.4 sec
+        """
+        k,          = index_tuple     
+        vdc_next,   = condition_tuple   
+        self._data_gz  = self._gz.get() # int16 
+        self._yoko.set(vdc_next)
+        self._log.event(0)
+        self._X.execute(self._data_gz)
+        for i in range(self._n_kernels):
+            self.Hs[i,k].accumulate( self.qs[i,:] )    
+        for i,j,j0,j1 in Comm_measure.it_compo_and_combination(self._filter_info,self._commutator_measure_info):
+            self.Hs_2D[i,j,k].accumulate( self.qs[j0,:] , self.qs[j1,:] )
+        self._log.event(1)
+    ######################
+    # Analysis Utilities #
+    ######################
+    def _moments_2D_correction(self,moments_2D):
+        compositions_indexes    = self._commutator_measure_info['compositions_indexes']
+        h                       = self._X.half_norms()[0,:]
+        moments_2D_corrected    = numpy.empty(moments_2D.shape,dtype=float)
+        for i,j,j0,j1 in Comm_measure.it_compo_and_combination(self._filter_info,self._commutator_measure_info):
+                moments_2D_corrected[0,i,j,:] = (h[j0]**2) * (h[j1]**2)* moments_2D[0,i,j,:]
+                moments_2D_corrected[1,i,j,:] = (h[j0]**4) * (h[j1]**4)* moments_2D[1,i,j,:]
+        return moments_2D_corrected
+    def _compute_cumulants_2D(self,moments_2D,moments):
+        shape                   = (moments_2D.shape[0]-1,)
+        shape                   += moments_2D.shape[1:]
+        cumulants_2D            = numpy.zeros( shape ,dtype=float)
+        for i,j,j0,j1 in Comm_measure.it_compo_and_combination(self._filter_info,self._commutator_measure_info):
+            cumulants_2D[0,i,j,:]    = moments_2D[0,i,j,:] - moments[1,j0,:]*moments[1,j1,:] # <<p0**2p1**2>> = <p0**2p1**2> - <p0**2><p1**2>
+        return cumulants_2D
+    def _compute_cumulants_2D_std(self,moments_2D_std,moments,moments_std):
+        shape = moments_2D_std.shape
+        cumulants_2D_std               = numpy.zeros( shape ,dtype=float)
+        for i,j,j0,j1 in Comm_measure.it_compo_and_combination(self._filter_info,self._commutator_measure_info):
+            cumulants_2D_std[0,i,j,:]  = moments_2D_std[0,i,j,:] - moments_std[1,j0,:]*moments[1,j1,:] - moments[1,j0,:]*moments_std[1,j1,:]
+        return cumulants_2D_std
+    def _compute_cumulants_2D_sample(self,cumulants_2D):
+        return self._compute_cumulants_sample(cumulants_2D)
+    def _compute_ns_2D(self,cumulants_2D_sample,ns):
+        shape    = cumulants_2D_sample.shape[1:]    # remove the 1st index
+        ns_2D    = numpy.zeros(shape ,dtype=float)  # composition,combinaition,l_Vdc
+        n2       = ns[1,...]
+        print'{}'.format(cumulants_2D_sample.shape)
+        print'{}'.format(n2.shape)
+        for i,j,j0,j1 in Comm_measure.it_compo_and_combination(self._filter_info,self._commutator_measure_info):
+            ns_2D[i,j,:] = cumulants_2D_sample[0,i,j,:] + n2[j0,:]*n2[j1,:]
+        return ns_2D
+    def _compute_delta_square(self,ns,ns_2D):
+        """
+            <delta**2> = 
+                <N**2> 
+                + 1/4( <n0**2> + <n1**2> + 2<n0n1> )
+                - <Nn0> - <Nn1> 
+        """
+        shape           =  (ns_2D.shape[0],)   # compositions
+        shape           += (ns_2D.shape[2],)   # vdc
+        delta_square    = numpy.zeros( shape ,dtype=float)
+        n2 = ns[1,...]
+        for i,(j0,j1,j2) in Comm_measure.gen_it_composition(self._commutator_measure_info):
+            delta_square[i,:] = n2[j2,:] + 0.25*(n2[j0,:]+n2[j1,:] + 2.0*ns_2D[i,0,:])- ns_2D[i,1,:] - ns_2D[i,1,:]
+        return delta_square
+    def _compute_comm(self,delta_square,ns):
+        shape   = delta_square.shape 
+        comm    = numpy.zeros( shape ,dtype=float) # composition,vdc
+        n       = ns[0,...]
+        for i,(j0,j1,j2) in Comm_measure.gen_it_composition(self._commutator_measure_info):
+            comm[i,:]  = (2.0*delta_square[i,:] - n[j0,:]*n[j1,:] )/n[j2,:]
+        return comm
+    ############
+    # Analysis #
+    ############
+    def _compute_1st_analysis_step_from_objects(self):
+        super(Comm_measure,self)._compute_1st_analysis_step_from_objects()
+        self.moments_2D = self._compute_moments_2D()
+        self.moments_2D = self._moments_2D_correction(self.moments_2D) 
+    def _update_data_attributes(self):
+        super(Comm_measure,self)._update_data_attributes()
+        self.moments_2D_std             = self._compute_2D_errors               (self.moments_2D,self._n_measures*self._l_data)
+        self.cumulants_2D               = self._compute_cumulants_2D            (self.moments_2D,self.moments)
+        self.cumulants_2D_std           = self._compute_cumulants_2D_std        (self.moments_2D,self.moments,self.moments_std)
+        self.cumulants_2D_sample        = self._compute_cumulants_2D_sample     (self.cumulants_2D)
+        # self.cumulants_2D_sample_std    = self._compute_cumulants_2D_sample_std (self.cumulants_std)
+        self.ns_2D                      = self._compute_ns_2D                   (self.cumulants_2D_sample,self.ns_corrected)
+        # self.ns_std                     = self._compute_ns_std(self.ns,self.cumulants_sample,self.cumulants_sample_std)
+        self.delta_square               = self._compute_delta_square            (self.ns_corrected,self.ns_2D)
+        self.comm                       = self._compute_comm                    (self.delta_square,self.ns_corrected)
+    def _update_data(self):
+        super(Comm_measure,self)._update_data()
+        self._data += [\
+               self.moments_2D,
+               self.moments_2D_std,
+               self.cumulants_2D,
+               self.cumulants_2D_std,
+               self.cumulants_2D_sample,
+               # self.cumulants_2D_sample_std,
+               self.ns_2D, 
+               # self.ns_2D_std, 
+               self.delta_square, 
+               self.comm
+               ]
+    def _load_data_list(self,data_list):
+        super(Comm_measure,self)._load_data_list(data_list)
+        # self.moments_2D                 = data_list[11]
+        self.moments_2D_std             = data_list[11]
+        self.cumulants_2D               = data_list[12]
+        self.cumulants_2D_std           = data_list[13]
+        self.cumulants_2D_sample        = data_list[14]
+        # self.cumulants_2D_sample_std, = data_list[15]
+        self.ns_2D                      = data_list[15]
+        # self.ns_2D_std, 
+        self.delta_square               = data_list[16] 
+        self.comm                       = data_list[17]
+    ###################
+    # Plots Utilities #
+    ###################
+    def fig_moments_2D(self):
+        I_jct           = self._compute_I_jct(self._Vdc_exp,self._R_1M)
+        moments_2D      = self.moments_2D
+        labels          = self._labels # this works for now
+        plot_kw = {'linestyle':'-'}
+        fig , axs = subplots(1,1)
+        for i,j,j0,j1 in Comm_measure.it_compo_and_combination(self._filter_info,self._commutator_measure_info):
+            plot_kw['label'] = '{}: ({})&({})'.format(i,labels[j0],labels[j1])
+            axs.plot(I_jct*10**6,moments_2D[0,i,j,:],**plot_kw) 
+        axs.legend()
+        axs.title.set_text('moments_2D')
+        return fig 
+    def fig_cumulants_2D(self):
+        I_jct           = self._compute_I_jct(self._Vdc_exp,self._R_1M)
+        cumulants_2D            = self.cumulants_2D
+        labels          = self._labels # this works for now
+        plot_kw = {'linestyle':'-'}
+        fig , axs = subplots(1,1)
+        for i,j,j0,j1 in Comm_measure.it_compo_and_combination(self._filter_info,self._commutator_measure_info):
+            plot_kw['label'] = '{}: {} & {}'.format(i,labels[j0],labels[j1])
+            axs.plot(I_jct*10**6,cumulants_2D[0,i,j,:],**plot_kw) 
+        axs.legend()
+        axs.title.set_text('cumulants_2D')
+        return fig 
+    def fig_cumulants_2D_sample(self):
+        I_jct           = self._compute_I_jct(self._Vdc_antisym,self._R_1M)
+        cumulants_2D_sample            = self.cumulants_2D_sample
+        labels          = self._labels # this works for now
+        plot_kw = {'linestyle':'-'}
+        fig , axs = subplots(1,1)
+        for i,j,j0,j1 in Comm_measure.it_compo_and_combination(self._filter_info,self._commutator_measure_info):
+            plot_kw['label'] = '{}: ({})&({})'.format(i,labels[j0],labels[j1])
+            axs.plot(I_jct*10**6,cumulants_2D_sample[0,i,j,:],**plot_kw) 
+        axs.legend()
+        axs.title.set_text('cumulants_2D_sample')
+        return fig 
+    def fig_ns_2D(self):
+        I_jct           = self._compute_I_jct(self._Vdc_antisym,self._R_1M)
+        ns_2D           = self.ns_2D
+        labels          = self._labels # this works for now
+        plot_kw = {'linestyle':'-'}
+        fig , axs = subplots(1,1)
+        for i,j,j0,j1 in Comm_measure.it_compo_and_combination(self._filter_info,self._commutator_measure_info):
+            plot_kw['label'] = '{}:({})&({})'.format(i,labels[j0],labels[j1])
+            axs.plot(I_jct*10**6,ns_2D[i,j,:],**plot_kw) 
+        axs.legend()
+        axs.title.set_text('ns_2D')
+        return fig
+    def fig_n0n1_vs_n0_times_n1(self):
+        I_jct           = self._compute_I_jct(self._Vdc_antisym,self._R_1M)
+        ns_2D           = self.ns_2D
+        n               = self.ns[0]
+        labels          = self._labels # this works for now
+        plot_kw = {'linestyle':'-'}
+        fig , axs = subplots(1,1)
+        for i,j,j0,j1 in Comm_measure.it_compo_and_combination(self._filter_info,self._commutator_measure_info):
+            plot_kw['label'] = '{}: ({})&({})'.format(i,labels[j0],labels[j1])
+            axs.plot(n[j0]*n[j1],ns_2D[i,j],**plot_kw) 
+        axs.legend()
+        axs.title.set_text('n0n1_vs_n0_times_n1')
+        return fig
+    def fig_delta_square(self):
+        I_jct           = self._compute_I_jct(self._Vdc_antisym,self._R_1M)
+        delta_square    = self.delta_square
+        labels          = self._labels # this works for now
+        plot_kw = {'linestyle':'-'}
+        fig , axs = subplots(1,1)
+        for i,(j0,j1,j2) in Comm_measure.gen_it_composition(self._commutator_measure_info):
+            plot_kw['label'] = '{}: ({})&({})&({})'.format(i,labels[j0],labels[j1],labels[j2])
+            axs.plot(I_jct*10**6,delta_square[i,:],**plot_kw) 
+        axs.legend()
+        axs.title.set_text('delta_square')
+        return fig 
+    def fig_comm(self):
+        I_jct           = self._compute_I_jct(self._Vdc_antisym,self._R_1M)
+        comm            = self.comm
+        labels          = self._labels # this works for now
+        plot_kw = {'linestyle':'-'}
+        fig , axs = subplots(1,1)
+        for i,(j0,j1,j2) in Comm_measure.gen_it_composition(self._commutator_measure_info):
+            plot_kw['label'] = '{}: ({})&({})&({})'.format(i,labels[j0],labels[j1],labels[j2])
+            axs.plot(I_jct*10**6,comm[i,:],**plot_kw) 
+        axs.legend()
+        axs.title.set_text('comm')
+        return fig 
