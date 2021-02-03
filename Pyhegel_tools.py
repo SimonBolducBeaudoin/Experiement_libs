@@ -1,6 +1,37 @@
 #!/bin/env/python
 #! -*- coding: utf-8 -*-
 
+#############
+# Utilities #
+#############
+
+def dict_to_attr(self,dict,user_key_to_attribute_key={}):
+    """
+        Used in a constructor to automatically set many attributes defined in a dictionnary
+    """
+    conv = user_key_to_attribute_key 
+    for key in dict :
+        setattr(self,conv[key],dict[key]) if key in conv else setattr(self,key,dict[key])
+
+def build_dict(**kargs):
+    return kargs
+
+color_list      = ['b', 'g', 'r', 'c','m','y','k']
+linestyle_list  = ['-','--','-.',':']
+marker_list     = ['*','+','x','o','.','D','s',',','v','^','<','>','1','2','3','4']  
+
+def gen_cycler(**options):
+    return cycler(color=color_list[:4],linestyle=linestyle_list[:4],marker=marker_list[:4])
+
+def build_array_of_objects(shape,constructor,*args,**kargs):
+    A = r_[[constructor(*args,**kargs) for i in range(prod(shape))]]
+    A.shape = shape
+    return A
+    
+####################
+# Pyhegel wrapeprs #
+####################
+
 class lakeshore_wrapper(object):
     """ 
         lakeshore_wrapper is a logical device derived from lakeshore_370
@@ -240,6 +271,11 @@ class Guzik_wrapper(object):
         hist.accumulate(data)
         plot(arange(-2.0**15,2.0**15),hist.get())
         xlim(0,1023)
+
+#################
+# Pyhegel tools #
+#################
+
 class timer(object):
     __version__ = {'timer':0.2}
     def __init__(self,size=1):
@@ -253,14 +289,6 @@ class timer(object):
     def durations(self):
         return self.timer[1,:]
         
-def dictionnary_to_attributes(self,dict,user_key_to_attribute_key={}):
-    """
-        Used in a constructor to automatically set many attributes defined in a dictionnary
-    """
-    conv = user_key_to_attribute_key 
-    for key in dict :
-        setattr(self,conv[key],dict[key]) if key in conv else setattr(self,key,dict[key])
-
 class logger(object):
     """
         Times an experiment 
@@ -326,7 +354,7 @@ class logger(object):
         self._attributes_instanciation(time_estimates,log_dict)
     def _attributes_instanciation(self,time_estimates , log_dict):
         if log_dict == () or log_dict == None : # Set the default log
-            dictionnary_to_attributes(self,self._default_log,self._user_key_to_attribute_key)
+            dict_to_attr(self,self._default_log,self._user_key_to_attribute_key)
         else :
             self._log_dict_to_attributes(log_dict,self._user_key_to_attribute_key)
         self._event_attributes_instanciation(log_dict)
@@ -465,9 +493,8 @@ class Experiment(object):
                                         , unrolls it
                                         and sets each devices into their initial sate (Good pratice)
                 - _init_objects      : initialize memory for large objects that will be used recurently (Falcultative)
-                - _set_data_default  : sets self.data to a initiale state 
+                - _build_data        : helps to build self._data dict
                 - _init_log          : defines the dehavior of the timer (Falcultative)
-                - _set_data_default  : defines the initial state of the self._data list
         , defining them is in a sense falcultative as the child class will still work if some or all of those are not defined 
         but it may lead to undefined bahavior
         - __del__ function
@@ -502,9 +529,9 @@ class Experiment(object):
         - analysis 
             User can call child.update_analysis() to analyse data after all the repetitions are completed
             For this to work user as to define
-                - _compute_1st_analysis_step_from_objects()
+                - _compute_1st_analysis_1st_step()
                     Is converting the data contained in the computing objects to esally saveable np.arrays.
-                - _update_data_attributes()
+                - _compute_analysis_2nd_step()
                     Does the rest of the analysis job (i.e. calling function to convert np.arrays to np.arrays)
                 - _update_data()
                     builds self.data list (containts its structure) from internal variables/attributes
@@ -534,7 +561,7 @@ class Experiment(object):
             I've patched it in the child class by enforcing type in the constructor methods using int()
             - Computing before measurement can sometime lead to crash dependin on what type of computation is done during analysis
     """
-    __version__     = { 'Experiment'  : 0.2 }
+    __version__     = { 'Experiment'  : 0.3 }
     __version__.update(logger.__version__)
     @classmethod
     def description(cls):
@@ -552,7 +579,6 @@ class Experiment(object):
         self.__BUILD_attributes()
         self.__SET_devices(devices)
         self.__INIT_objects()
-        self.__SET_data_default()
         self.__INIT_log()
     def __SET_options(self,options):
         self._verbose   = options['verbose'] if 'verbose'   in options else False
@@ -595,10 +621,6 @@ class Experiment(object):
             self._init_objects()
             # This was removed for now as it causes more trouble than it solves...
             # self._Experiment__update_analysis_from_aquisition()
-    def __SET_data_default(self):
-        if self._verbose : 
-            print '{} is setting default data'.format(self.__class__.__name__)
-        self._set_data_default()
     def __INIT_log(self):
         if self._data_from_experiment == False :
             pass
@@ -620,8 +642,6 @@ class Experiment(object):
         pass
     def _init_log(self):
         self._log            =   logger((),()) # Default timer
-    def _set_data_default(self):
-        self._data           =   []
     def get_data(self):
         return self._data
     #############
@@ -632,6 +652,8 @@ class Experiment(object):
         """
             Args are all 1D array
         """
+        if len(args) == 0 : # called empty
+            return iter(()) , iter(())
         index_vec = ()
         for a in args :
             index_vec += ( range(len(a)) , )
@@ -698,18 +720,18 @@ class Experiment(object):
             If these moments are not centered then the definition is good for none centered moment
             Idem for centered moment
         """
-        return sqrt(numpy.abs(mu2k-muk)/float(n))
+        return sqrt(numpy.abs(mu2k-muk**2)/float(n))
     ############
     # Analysis #
     ############
-    def _compute_1st_analysis_step_from_objects(self):
+    def _compute_1st_analysis_1st_step(self):
         pass
-    def _update_data_attributes(self):
+    def _compute_analysis_2nd_step(self):
         pass
+    def _build_data(self):
+        return {} # dummy default behavior
     def _update_data(self):
-        self._data = [] # dummy default behavior
-    def _load_data_list(self,data_list):
-        pass
+        self._data = self._build_data() 
     ###################
     # Plots Utilities #
     ###################
@@ -722,17 +744,14 @@ class Experiment(object):
     # Should never change/double underscore unless public #
     ########################################################
     def save_data(self,path_save):    
-        time_stamp = time.strftime('%y-%m-%d_%Hh%M') # File name will correspond to when the experiment ended
-        filename   = 'data_{}.npz'.format(time_stamp)
-        savez_compressed\
-        (\
-            os.path.join( path_save, filename ) ,\
-            versions_saved  =   self.__version__,\
-            options         =   self._options    ,\
-            conditions      =   self._conditions ,\
-            meta_info       =   self._meta_info  ,\
-            data            =   self._data
-        )
+        time_stamp                  = time.strftime('%y-%m-%d_%Hh%M') # File name will correspond to when the experiment ended
+        filename                    = 'data_{}.npz'.format(time_stamp)
+        to_save                     = self._data
+        to_save['_versions_saved']  = self.__version__
+        to_save['_options']         = self._options
+        to_save['_conditions']      = self._conditions
+        to_save['_meta_info']       = self._meta_info
+        savez_compressed(os.path.join(path_save,filename),**to_save)
         print "Data saved \n \t folder : {} \n \t {}".format(path_save,filename)  
     @classmethod
     def load_data(cls,folder,filename):
@@ -741,22 +760,26 @@ class Experiment(object):
             experiment = class_name().load_data(folder,filename)
         """
         data = numpy.load(folder+'\\'+filename,allow_pickle=True)
-        conditions  = data['conditions']
+        data = dict(data)
+        conditions  = data['_conditions']
+        del data['_conditions']
         devices     = None
-        meta_info   = data['meta_info'][()] # to load a dict saved by numpy.savez
-        options     = data['options'][()]   # to load a dict saved by numpy.savez
-        options['loading_data'] = True 
-        
-        self = cls(conditions,devices,meta_info,**options)
-        self._data_from_experiment    = False 
-        self._versions_saved = data['versions_saved'][()]
+        meta_info   = data['_meta_info'][()] # to load a dict saved by numpy.savez
+        del data['_meta_info']
+        options     = data['_options'][()]   # to load a dict saved by numpy.savez
+        del data['_options']
+        options['loading_data'] = True
+        self                        = cls(conditions,devices,meta_info,**options)
+        self._data_from_experiment  = False 
+        self._versions_saved        = data['_versions_saved'][()]
+        del data['_versions_saved']
         self.__check__cls_vs_data_versions()
-        self._load_data_list(data['data'])
+        dict_to_attr(self,data)
         return self      
     def measure(self):
         self.__measurement_loop()
-    def update_analysis(self):
-        return self.__update_analysis_from_aquisition() if self._data_from_experiment else self.__update_analysis_from_load()
+    def update_analysis(self,**kargs):
+        return self.__update_analysis_from_aquisition(**kargs) if self._data_from_experiment else self.__update_analysis_from_load(**kargs)
     def __repetition_loop_start(self,n):
         self._log.loop(0,n)
         self._repetition_loop_start(n)
@@ -776,17 +799,17 @@ class Experiment(object):
         self.__all_loop_open()
         for n  in main_it :
             index_it , condition_it = self._core_loop_iterator()
-            self.__repetition_loop_start(n) 
+            self.__repetition_loop_start(n)
             for index_tuple, condition_tuple in zip(index_it,condition_it):
                 self.__loop_core(index_tuple,condition_tuple)
             self.__repetition_loop_end(n)
         self.__all_loop_close()
-    def __update_analysis_from_aquisition(self) :
-        self._compute_1st_analysis_step_from_objects()
-        self._update_data_attributes()
+    def __update_analysis_from_aquisition(self,**kargs) :
+        self._compute_1st_analysis_1st_step()
+        self._compute_analysis_2nd_step(**kargs)
         self._update_data()
-    def __update_analysis_from_load(self):
-        self._update_data_attributes()
+    def __update_analysis_from_load(self,**kargs):
+        self._compute_analysis_2nd_step(**kargs)
         self._update_data()
     def __check__cls_vs_data_versions(self):
         print 'Loading {}'.format(self.__class__.__name__)
@@ -1145,21 +1168,21 @@ class Gain_amplitude(Tunnel_junction):
         return numpy.absolute( dt*numpy.fft.rfft(G) )
     def _compute_G_of_f_unitless(self,G):
         return numpy.absolute( numpy.fft.rfft(G) )
-    def _compute_1st_analysis_step_from_objects(self):
+    def _build_data(self):
+        return {\
+            'S2_sample'       : self.S2_sample,
+            'G_of_t'          : self.G_of_t,
+            'G_of_f'          : self.G_of_f,
+            'G_of_f_unitless' : self.G_of_f_unitless
+            }
+    def _compute_1st_analysis_1st_step(self):
         self.S2_sample = self._compute_S2_sample()    
-    def _update_data_attributes(self):
+    def _compute_analysis_2nd_step(self):
         self.S2_windowed        = self._window_after_2ns         (self.S2_sample)
         self.S2_sym             = self._symetrize_S2             (self.S2_windowed)
         self.G_of_t             = self._compute_G                (self.S2_sym,self._R_jct)
         self.G_of_f             = self._compute_G_of_f           (self.G_of_t,dt*10**(-9)) #Has units of dt * units of G(t) here  [Hz-1]*Hz
         self.G_of_f_unitless    = self._compute_G_of_f_unitless  (self.G_of_t)    #[]
-    def _update_data(self):
-        self._data = [self.S2_sample,self.G_of_t,self.G_of_f,self.G_of_f_unitless]
-    def _load_data_list(self,data_list):
-        self.S2_sample          = data_list[0]
-        self.G_of_t             = data_list[1]
-        self.G_of_f             = data_list[2]
-        self.G_of_f_unitless    = data_list[3]
     ###################
     # Plots Utilities #
     ###################
@@ -1204,6 +1227,107 @@ class Gain_amplitude(Tunnel_junction):
     # Privates/Should never change #
     ################################
 
+class Gain_amplitude_drift(Experiment):
+    """
+        Run many measurement of the gain amplitude using Gain_amplitude class
+        and saves the array of results with times staps
+        Todos : 
+            -
+        Bugs :
+            -
+    """ 
+    __version__ = { 'Gain_amplitude_drift'  : 0.1 }
+    __version__.update(Experiment.__version__)
+    __version__.update(Gain_amplitude.__version__)
+    @staticmethod
+    def gen_meta_info(circuit_info,compute_info,aqc_info,quads_info,repetitions_info):
+        meta_info = Gain_amplitude.gen_meta_info(circuit_info,compute_info,aqc_info,quads_info,)
+        meta_info['repetitions_info'] = repetitions_info
+        return meta_info
+    @staticmethod
+    def gen_aqc_info(l_data,dt):
+        return Gain_amplitude.gen_aqc_info(l_data,dt)
+    @staticmethod
+    def gen_compute_info(n_threads):
+        return Gain_amplitude.gen_compute_info(n_threads,)
+    @staticmethod
+    def gen_circuit_info(R_jct,R_1M,R_tl):
+        return Gain_amplitude.gen_circuit_info(R_jct,R_1M,R_tl)
+    @staticmethod
+    def gen_quads_info(l_kernel):
+        return Gain_amplitude.gen_quads_info(l_kernel,)
+    @staticmethod
+    def gen_repetitions_info(delai):
+        return {'delai':delai}
+    def _set_conditions(self,conditions):
+        self._n_mes_gain    =   conditions[1]
+        self.Vdc            =   conditions[2]
+    def _set_devices(self,devices):
+        self._gz            =   devices[0] 
+        self._yoko          =   devices[1]
+    def _set_options(self,options):
+        self._interlacing               =   options['interlacing']      if 'interlacing'        in options else False
+        self._Vdc_pos_and_neg           =   options['Vdc_pos_and_neg']  if 'Vdc_pos_and_neg'    in options else True
+        self._estimated_time_per_loop   =   options['time_per_loop']    if 'time_per_loop'      in options else 1.0
+    def _set_meta_info(self,meta_info):
+        self._aqc_info          =   meta_info['aqc_info'] 
+        self._quads_info        =   meta_info['quads_info']
+        self._repetitions_info  =   meta_info['repetitions_info']
+    def _init_objects(self):
+        conditions_gain = (self._n_mes_gain,self.Vdc)
+        n_repetitions   = self._n_measures
+        self.gains      = build_array_of_objects((n_repetitions,),Gain_amplitude,conditions_gain,self._devices,self._meta_info,**self._options)
+        l_hc            = self.gains[0]._l_hc 
+        self.gs         = numpy.zeros((n_repetitions,l_hc))     # means gain for each repetition
+        self.tictocs    = numpy.zeros((n_repetitions,2))        # start , duration
+    def _build_attributes(self):
+        self._build_from_aqc        (self._aqc_info)    
+        self._build_from_quads      (self._quads_info)
+        self._build_from_repetitions(self._repetitions_info)
+    def _build_from_aqc(self,aqc_info):
+        self._l_data            =   int(aqc_info['l_data'])
+        self._dt                =   aqc_info['dt']
+    def _build_from_quads(self,quads_info):
+        self._l_kernel          =   int(quads_info['l_kernel'])
+        self._l_hc              =   self._l_kernel/2 + 1
+    def _build_from_repetitions(self,repetitions_info):
+        self._delai             =   repetitions_info['delai']
+    def _repetition_loop_start(self,n):
+        """
+            Everything happens in the repetition loop core
+        """
+        self.gains[n].measure()
+        self.gains[n].update_analysis()
+        self.gs[n]          = 2.0*self.gains[n].get_g_mean() # Empiric factor 2 ... J'ai toujours pas trouvé pourquoi il est là...
+        self.tictocs[n,:]   = self.gains[n]._log._experiment.timer[:,0] # retrieve info from the internal logger of each experiment
+        if not self._delai == 0.0 :
+            print "Waiting for {} seconds".format(self._delai)
+            wait(self._delai)
+    def _core_loop_iterator(self):
+        """
+            empty core loop iterator to skip core loop
+        """
+        return Experiment._super_enumerate() # returns two empty enumetators
+    ###################
+    # Analysis Utilities #
+    ###################
+    def _build_data(self):
+        return {'gs':self.gs,'tictocs':self.tictocs}
+    ###########
+    # Figures #
+    ###########  
+    def fig_all_gs(self):
+        fig, ax = subplots(1,1)
+        gs = self.gs
+        freqs = numpy.fft.rfftfreq(self._l_kernel,self._dt) 
+        for g in gs :
+            ax.plot(freqs,g)
+        ax.set_title('f[GHz]')
+        ax.set_ylabel('g(f)[~]')
+        string_frmt = " l_data = 2**{} \n n_measure = {} \n n_repetitions = {}"
+        string = string_frmt.format(log2(self._l_data),self._n_mes_gain,self._n_measures)
+        ax.text(0.75,0.85,string,transform=ax.transAxes)
+        return fig 
 class Quads(Tunnel_junction):
     """
         Help to generate inputs for the constructor
@@ -1538,6 +1662,15 @@ class Quads(Tunnel_junction):
         self._data_gz   = self._gz.get() # int16
         self._X.execute( self._data_gz )
     ###################
+    # Analysis Utilities #
+    ###################
+    def _build_data(self):
+        return {\
+            'betas'     : self.betas ,
+            'filters'   : self.filters ,
+            'ks'        : self.ks
+            }
+    ###################
     # Plots Utilities #
     ###################
     @staticmethod
@@ -1829,13 +1962,28 @@ class nsVsVDC(Quads):
         ns_std[2,:,:] = (2.0/3.0)*cumulants_sample_std[2,:,:] + 2.0*cumulants_sample_std[1,:,:]*cumulants_sample[1,:,:] 
         ns_std[3,:,:] = ns_std[2,:,:]/ns[0,:,:]   + ns[2,:,:]*(ns_std[0,:,:]/ns[0,:,:]**2)
         return ns_std 
+    def _build_data(self):
+        data = super(nsVsVDC,self)._build_data()
+        data.update({\
+                'moments'               :self.moments,
+                'moments_std'           :self.moments_std,
+                'cumulants'             :self.cumulants,
+                'cumulants_std'         :self.cumulants_std,
+                'cumulants_sample'      :self.cumulants_sample,
+                'cumulants_sample_std' :self.cumulants_sample_std,
+                'ns'                    :self.ns ,
+                'ns_std'                :self.ns_std ,
+                'ns_corrected'          :self.ns_corrected ,
+                'C4'                    :self.C4 
+                })
+        return data
     ############
     # Analysis #
     ############
-    def _compute_1st_analysis_step_from_objects(self):
+    def _compute_1st_analysis_1st_step(self):
         self.moments = self._compute_moments()
         self.moments = self._moments_correction(self.moments)    
-    def _update_data_attributes(self):
+    def _compute_analysis_2nd_step(self):
         self.moments_std            = self._compute_errors(self.moments,self._n_measures*self._l_data)
         self.cumulants              = self._compute_cumulants(self.moments)
         self.cumulants_std          = self._compute_cumulants_std(self.moments,self.moments_std)
@@ -1845,30 +1993,6 @@ class nsVsVDC(Quads):
         self.ns_std                 = self._compute_ns_std(self.ns,self.cumulants_sample,self.cumulants_sample_std)
         self.ns_corrected           = self._compute_ns_corrected(self.ns,self.cumulants_sample,self._compute_Vdc_antisym(self.Vdc),self._R_jct,self._R_1M,self._V_th)
         self.C4                     = self._compute_C4(self.cumulants_sample)
-    def _update_data(self):
-        self._data = [\
-                self.moments,
-                self.moments_std,
-                self.cumulants,
-                self.cumulants_std,
-                self.cumulants_sample,
-                self.cumulants_sample_std,
-                self.ns ,
-                self.ns_std ,
-                self.ns_corrected ,
-                self.C4 
-                ]
-    def _load_data_list(self,data_list):
-        self.moments                = data_list[0]
-        self.moments_std            = data_list[1]
-        self.cumulants              = data_list[2]
-        self.cumulants_std          = data_list[3]
-        self.cumulants_sample       = data_list[4]
-        self.cumulants_sample_std   = data_list[5]
-        self.ns                     = data_list[7]
-        self.ns_std                 = data_list[8]
-        self.ns_corrected           = data_list[9]
-        self.C4                     = data_list[10]
     ###################
     # Plots Utilities #
     ###################
@@ -1954,67 +2078,63 @@ class nsVsVDC(Quads):
     ###########
     # Meant for validation
     def _fig_hist(self,V_indexes,kernel_indexes):
+        """
+            Works only during aquisition
+        """
         fig = figure()
         ax = gca()
         for v in V_indexes :
             for k in kernel_indexes :
                 ax.plot(self.Hs[v,k].get())
-    def _fig_q(self,kernel_slice=slice(None)):
+    def _fig_qs(self,moment_index,kernel_slice=slice(None),errorbar=False,capsize=2.5):
+        y_labels        = ('<q>','<q**2>','<q**4>','<q**8>')
         labels          = self._labels
         I_jct           = self._compute_I_jct(self._Vdc_exp,self._R_1M)
         moments         = self.moments
+        moments_std     = self.moments_std
         plot_kw = {'linestyle':'-'}
         fig , axs = subplots(1,1)
         for i, label in enumerate(labels[kernel_slice]):
             plot_kw['label'] = label 
-            axs.plot(I_jct*10**6,moments[0,i,:],**plot_kw) 
-            # axs.errorbar(I_jct*10**6,ns[0,i,:],yerr=ns_std[0,i,:],**plot_kw) 
+            if errorbar : 
+                plot_kw['capsize'] = capsize
+                axs.errorbar(I_jct*10**6,moments[moment_index,i,:],yerr=moments_std[moment_index,i,:],**plot_kw) 
+            else        : axs.plot(I_jct*10**6,moments[moment_index,i,:],**plot_kw) 
         axs.legend()
-        axs.title.set_text('<q>')
-        axs.set_ylabel('')
+        axs.title.set_text('Moment of the total signal')
+        axs.set_ylabel(y_labels[moment_index])
         axs.set_xlabel('I_jct [uA]')
-    def _fig_q2(self,kernel_slice=slice(None)):
+    def _fig_q  (self,kernel_slice=slice(None),errorbar=False,capsize=2.5):
+        self._fig_qs(0,kernel_slice,errorbar,capsize)
+    def _fig_q2 (self,kernel_slice=slice(None),errorbar=False,capsize=2.5):
+        self._fig_qs(1,kernel_slice,errorbar,capsize)
+    def _fig_q4 (self,kernel_slice=slice(None),errorbar=False,capsize=2.5):
+        self._fig_qs(2,kernel_slice,errorbar,capsize)
+    def _fig_q8 (self,kernel_slice=slice(None)):
+        self._fig_qs(3,kernel_slice,False)     
+    def _fig_cumulants_sample(self,cumulant_index,kernel_slice=slice(None),errorbar=False,capsize=2.5):
+        y_labels        = ('<<q>>','<<q**2>>','<<q**4>>')
         labels          = self._labels
-        I_jct           = self._compute_I_jct(self._Vdc_exp,self._R_1M)
-        moments         = self.moments
+        I_jct           = self._compute_I_jct(self._Vdc_antisym,self._R_1M)
+        cumulants       = self.cumulants_sample
+        cumulants_std   = self.cumulants_sample_std
         plot_kw = {'linestyle':'-'}
         fig , axs = subplots(1,1)
         for i, label in enumerate(labels[kernel_slice]):
             plot_kw['label'] = label 
-            axs.plot(I_jct*10**6,moments[1,i,:],**plot_kw) 
-            # axs.errorbar(I_jct*10**6,ns[0,i,:],yerr=ns_std[0,i,:],**plot_kw) 
+            if errorbar : 
+                plot_kw['capsize'] = capsize
+                axs.errorbar(I_jct*10**6,cumulants[cumulant_index,i,:],yerr=cumulants_std[cumulant_index,i,:],**plot_kw) 
+            else        : axs.plot(I_jct*10**6,cumulants[cumulant_index,i,:],**plot_kw) 
         axs.legend()
-        axs.title.set_text('<q**2>')
-        axs.set_ylabel('')
+        axs.title.set_text('Cumulant of the sample')
+        axs.set_ylabel(y_labels[cumulant_index])
         axs.set_xlabel('I_jct [uA]')
-    def _fig_q4(self,kernel_slice=slice(None)):
-        labels          = self._labels
-        I_jct           = self._compute_I_jct(self._Vdc_exp,self._R_1M)
-        moments         = self.moments
-        plot_kw = {'linestyle':'-'}
-        fig , axs = subplots(1,1)
-        for i, label in enumerate(labels[kernel_slice]):
-            plot_kw['label'] = label 
-            axs.plot(I_jct*10**6,moments[2,i,:],**plot_kw) 
-            # axs.errorbar(I_jct*10**6,ns[0,i,:],yerr=ns_std[0,i,:],**plot_kw) 
-        axs.legend()
-        axs.title.set_text('<q**4>')
-        axs.set_ylabel('')
-        axs.set_xlabel('I_jct [uA]')
-    def _fig_q8(self,kernel_slice=slice(None)):
-        labels          = self._labels
-        I_jct           = self._compute_I_jct(self._Vdc_exp,self._R_1M)
-        moments         = self.moments
-        plot_kw = {'linestyle':'-'}
-        fig , axs = subplots(1,1)
-        for i, label in enumerate(labels[kernel_slice]):
-            plot_kw['label'] = label 
-            axs.plot(I_jct*10**6,moments[3,i,:],**plot_kw) 
-            # axs.errorbar(I_jct*10**6,ns[0,i,:],yerr=ns_std[0,i,:],**plot_kw) 
-        axs.legend()
-        axs.title.set_text('<q**8>')
-        axs.set_ylabel('')
-        axs.set_xlabel('I_jct [uA]')      
+    def _fig_cumulant_sample_O2(self,kernel_slice=slice(None),errorbar=False,capsize=2.5):
+        """  <<p**2>> of the sample"""
+        self._fig_cumulants_sample(1,kernel_slice,errorbar,capsize)
+    def _fig_cumulant_sample_O4 (self,kernel_slice=slice(None),errorbar=False,capsize=2.5):
+        self._fig_cumulants_sample(2,kernel_slice,errorbar,capsize)
     # Meant for analysis
     def fig_n_no_fs(self):
         """
@@ -2039,6 +2159,21 @@ class nsVsVDC(Quads):
         """
         labels          = self._labels
         I_jct           = self._compute_I_jct(self._Vdc_antisym,self._R_1M)
+        ns              = self.ns
+        ns_std          = self.ns_std
+        plot_kw = {'linestyle':'-'}
+        fig , axs = subplots(1,1)
+        for i, label in enumerate(labels[kernel_slice]):
+            plot_kw['label'] = label 
+            plot_fct(I_jct,ns,ns_std,i,axs,errorbar=False,**plot_kw)
+        axs.legend()
+        return fig
+    def _fig_ns_corrected(self,kernel_slice,plot_fct):
+        """
+            Code commun pour les figures <n>,<n**2>,<dn**2>
+        """
+        labels          = self._labels
+        I_jct           = self._compute_I_jct(self._Vdc_antisym,self._R_1M)
         ns              = self.ns_corrected
         ns_std          = self.ns_std
         plot_kw = {'linestyle':'-'}
@@ -2055,6 +2190,13 @@ class nsVsVDC(Quads):
         plot_fct = nsVsVDC._plot_n
         fig = self._fig_ns(kernel_slice,plot_fct)
         return fig 
+    def fig_n_corrected(self,kernel_slice=slice(None)):
+        """
+             <n>
+        """
+        plot_fct = nsVsVDC._plot_n
+        fig = self._fig_ns_corrected(kernel_slice,plot_fct)
+        return fig 
     def fig_n2(self,kernel_slice=slice(None)):
         """
             <n^2>
@@ -2062,12 +2204,26 @@ class nsVsVDC(Quads):
         plot_fct = nsVsVDC._plot_n2
         fig = self._fig_ns(kernel_slice,plot_fct)
         return fig 
+    def fig_n2_corrected(self,kernel_slice=slice(None)):
+        """
+            <n^2>
+        """
+        plot_fct = nsVsVDC._plot_n2
+        fig = self._fig_ns_corrected(kernel_slice,plot_fct)
+        return fig 
     def fig_dn2(self,kernel_slice=slice(None)):
         """
             Var n
         """
         plot_fct = nsVsVDC._plot_dn2
         fig = self._fig_ns(kernel_slice,plot_fct)
+        return fig 
+    def fig_dn2_corrected(self,kernel_slice=slice(None)):
+        """
+            Var n
+        """
+        plot_fct = nsVsVDC._plot_dn2
+        fig = self._fig_ns_corrected(kernel_slice,plot_fct)
         return fig 
     def _fig_ns_vs_n(self,kernel_slice,plot_fct):
         """
@@ -2397,12 +2553,14 @@ class Comm_measure(nsVsVDC):
                 moments_2D_corrected[0,i,j,:] = (h[j0]**2) * (h[j1]**2)* moments_2D[0,i,j,:]
                 moments_2D_corrected[1,i,j,:] = (h[j0]**4) * (h[j1]**4)* moments_2D[1,i,j,:]
         return moments_2D_corrected
-    def _compute_cumulants_2D(self,moments_2D,moments):
+    def _compute_cumulants_2D(self,moments_2D,moments,**options):
         shape                   = (moments_2D.shape[0]-1,)
         shape                   += moments_2D.shape[1:]
         cumulants_2D            = numpy.zeros( shape ,dtype=float)
+        if  options.get('show_steps') : fig , axs, labels, Idc = self._fig_cumulants_2D_steps()
         for i,j,j0,j1 in Comm_measure.it_compo_and_combination(self._filter_info,self._commutator_measure_info):
             cumulants_2D[0,i,j,:]    = moments_2D[0,i,j,:] - moments[1,j0,:]*moments[1,j1,:] # <<p0**2p1**2>> = <p0**2p1**2> - <p0**2><p1**2>
+            if options.get('show_steps') : self._plot_steps(axs,i,j,j0,j1,Idc,cumulants_2D[0,i,j,:],numpy.sqrt(moments_2D[0,i,j,:]),moments[1,j0,:],moments[1,j1,:],labels=labels,args_labels=('sqrt<p0**2p1**2>','<p0**2>','<p1**2>'))
         return cumulants_2D
     def _compute_cumulants_2D_std(self,moments_2D_std,moments,moments_std):
         shape = moments_2D_std.shape
@@ -2416,8 +2574,6 @@ class Comm_measure(nsVsVDC):
         shape    = cumulants_2D_sample.shape[1:]    # remove the 1st index
         ns_2D    = numpy.zeros(shape ,dtype=float)  # composition,combinaition,l_Vdc
         n2       = ns[1,...]
-        print'{}'.format(cumulants_2D_sample.shape)
-        print'{}'.format(n2.shape)
         for i,j,j0,j1 in Comm_measure.it_compo_and_combination(self._filter_info,self._commutator_measure_info):
             ns_2D[i,j,:] = cumulants_2D_sample[0,i,j,:] + n2[j0,:]*n2[j1,:]
         return ns_2D
@@ -2442,17 +2598,32 @@ class Comm_measure(nsVsVDC):
         for i,(j0,j1,j2) in Comm_measure.gen_it_composition(self._commutator_measure_info):
             comm[i,:]  = (2.0*delta_square[i,:] - n[j0,:]*n[j1,:] )/n[j2,:]
         return comm
+    def _build_data(self):
+        data = super(Comm_measure,self)._build_data()
+        data.update({\
+            'moments_2D'            : self.moments_2D,
+            'moments_2D_std'        : self.moments_2D_std,
+            'cumulants_2D'          : self.cumulants_2D,
+            'cumulants_2D_std'      : self.cumulants_2D_std,
+            'cumulants_2D_sample'   : self.cumulants_2D_sample,
+            #'cumulants_2D_sample_std' :self.cumulants_2D_sample_std,
+            'ns_2D'                 : self.ns_2D,
+            # self.ns_2D_std, 
+            'delta_square'          : self.delta_square,
+            'comm'                  : self.comm
+            })
+        return data
     ############
     # Analysis #
     ############
-    def _compute_1st_analysis_step_from_objects(self):
-        super(Comm_measure,self)._compute_1st_analysis_step_from_objects()
+    def _compute_1st_analysis_1st_step(self):
+        super(Comm_measure,self)._compute_1st_analysis_1st_step()
         self.moments_2D = self._compute_moments_2D()
         self.moments_2D = self._moments_2D_correction(self.moments_2D) 
-    def _update_data_attributes(self):
-        super(Comm_measure,self)._update_data_attributes()
+    def _compute_analysis_2nd_step(self,**kargs):
+        super(Comm_measure,self)._compute_analysis_2nd_step()
         self.moments_2D_std             = self._compute_2D_errors               (self.moments_2D,self._n_measures*self._l_data)
-        self.cumulants_2D               = self._compute_cumulants_2D            (self.moments_2D,self.moments)
+        self.cumulants_2D               = self._compute_cumulants_2D            (self.moments_2D,self.moments,show_steps=kargs.get('show_steps'))
         self.cumulants_2D_std           = self._compute_cumulants_2D_std        (self.moments_2D,self.moments,self.moments_std)
         self.cumulants_2D_sample        = self._compute_cumulants_2D_sample     (self.cumulants_2D)
         # self.cumulants_2D_sample_std    = self._compute_cumulants_2D_sample_std (self.cumulants_std)
@@ -2460,36 +2631,11 @@ class Comm_measure(nsVsVDC):
         # self.ns_std                     = self._compute_ns_std(self.ns,self.cumulants_sample,self.cumulants_sample_std)
         self.delta_square               = self._compute_delta_square            (self.ns_corrected,self.ns_2D)
         self.comm                       = self._compute_comm                    (self.delta_square,self.ns_corrected)
-    def _update_data(self):
-        super(Comm_measure,self)._update_data()
-        self._data += [\
-               self.moments_2D,
-               self.moments_2D_std,
-               self.cumulants_2D,
-               self.cumulants_2D_std,
-               self.cumulants_2D_sample,
-               # self.cumulants_2D_sample_std,
-               self.ns_2D, 
-               # self.ns_2D_std, 
-               self.delta_square, 
-               self.comm
-               ]
-    def _load_data_list(self,data_list):
-        super(Comm_measure,self)._load_data_list(data_list)
-        # self.moments_2D                 = data_list[11]
-        self.moments_2D_std             = data_list[11]
-        self.cumulants_2D               = data_list[12]
-        self.cumulants_2D_std           = data_list[13]
-        self.cumulants_2D_sample        = data_list[14]
-        # self.cumulants_2D_sample_std, = data_list[15]
-        self.ns_2D                      = data_list[15]
-        # self.ns_2D_std, 
-        self.delta_square               = data_list[16] 
-        self.comm                       = data_list[17]
     ###################
     # Plots Utilities #
     ###################
-    def fig_moments_2D(self):
+    # Meant for validation/ private self._fig
+    def _fig_moments_2D(self):
         I_jct           = self._compute_I_jct(self._Vdc_exp,self._R_1M)
         moments_2D      = self.moments_2D
         labels          = self._labels # this works for now
@@ -2499,9 +2645,37 @@ class Comm_measure(nsVsVDC):
             plot_kw['label'] = '{}: ({})&({})'.format(i,labels[j0],labels[j1])
             axs.plot(I_jct*10**6,moments_2D[0,i,j,:],**plot_kw) 
         axs.legend()
-        axs.title.set_text('moments_2D')
+        axs.title.set_text('<p0**2p1**2> of the total signal')
+        axs.set_ylabel('<p0**2p1**2>')
+        axs.set_xlabel('I_jct [uA]')
         return fig 
-    def fig_cumulants_2D(self):
+    # _fig_compute show the constituent and results of each computing ste
+    @staticmethod
+    def _plot_steps(axs,i,j,j0,j1,abscisse,results,arg0,arg1,arg2,labels,args_labels=('arg0','arg1','arg2')):
+        label_0 = '{}: ({})&({})'.format(i,labels[j0],labels[j1])
+        label_1 = args_labels[0]
+        label_2 = args_labels[1]
+        label_3 = args_labels[2]
+        color               = next(axs[0]._get_lines.prop_cycler)['color']
+        axs[0].plot(abscisse,results    ,color=color,label=label_0) 
+        axs[1].plot(abscisse,arg0       ,color=color,marker=marker_list[0],label=label_1) 
+        axs[1].plot(abscisse,arg1       ,color=color,marker=marker_list[1],label=label_2) 
+        axs[1].plot(abscisse,arg2       ,color=color,marker=marker_list[2],label=label_3)
+        axs[0].legend()
+        axs[1].legend()
+    def _fig_steps(self):
+        labels  = self._labels # this works for now
+        fig , axs = subplots(1,2)
+        return fig , axs , labels
+    def _fig_cumulants_2D_steps(self):
+        fig , axs , labels = self._fig_steps()
+        fig.suptitle('<<p0**2p1**2>> = <p0**2p1**2> - <p0**2><p1**2>')
+        Idc = self._compute_I_jct(self._Vdc_exp,self._R_1M)
+        axs[0].set_ylabel('<<p0**2p1**2>>')
+        axs[0].set_xlabel('I_jct [uA]')
+        return fig , axs , labels , Idc
+    #####
+    def _fig_cumulants_2D(self):
         I_jct           = self._compute_I_jct(self._Vdc_exp,self._R_1M)
         cumulants_2D            = self.cumulants_2D
         labels          = self._labels # this works for now
@@ -2512,8 +2686,11 @@ class Comm_measure(nsVsVDC):
             axs.plot(I_jct*10**6,cumulants_2D[0,i,j,:],**plot_kw) 
         axs.legend()
         axs.title.set_text('cumulants_2D')
+        axs.title.set_text('<<n0n1>> of the total signal')
+        axs.set_ylabel('<<n0n1>>')
+        axs.set_xlabel('I_jct [uA]')
         return fig 
-    def fig_cumulants_2D_sample(self):
+    def _fig_cumulants_2D_sample(self):
         I_jct           = self._compute_I_jct(self._Vdc_antisym,self._R_1M)
         cumulants_2D_sample            = self.cumulants_2D_sample
         labels          = self._labels # this works for now
@@ -2523,8 +2700,11 @@ class Comm_measure(nsVsVDC):
             plot_kw['label'] = '{}: ({})&({})'.format(i,labels[j0],labels[j1])
             axs.plot(I_jct*10**6,cumulants_2D_sample[0,i,j,:],**plot_kw) 
         axs.legend()
-        axs.title.set_text('cumulants_2D_sample')
+        axs.title.set_text('<<n0n1>> of the sample')
+        axs.set_ylabel('<<n0n1>>')
+        axs.set_xlabel('I_jct [uA]')
         return fig 
+    # Meant for analysis
     def fig_ns_2D(self):
         I_jct           = self._compute_I_jct(self._Vdc_antisym,self._R_1M)
         ns_2D           = self.ns_2D
@@ -2535,19 +2715,23 @@ class Comm_measure(nsVsVDC):
             plot_kw['label'] = '{}:({})&({})'.format(i,labels[j0],labels[j1])
             axs.plot(I_jct*10**6,ns_2D[i,j,:],**plot_kw) 
         axs.legend()
-        axs.title.set_text('ns_2D')
+        axs.title.set_text('<n0n1> of the sample')
+        axs.set_ylabel('<n0n1>')
+        axs.set_xlabel('I_jct [uA]')
         return fig
     def fig_n0n1_vs_n0_times_n1(self):
         I_jct           = self._compute_I_jct(self._Vdc_antisym,self._R_1M)
         ns_2D           = self.ns_2D
-        n               = self.ns[0]
+        n               = self.ns_corrected[0]
         labels          = self._labels # this works for now
-        plot_kw = {'linestyle':'-'}
+        plot_kw = {'linestyle':'-','marker':'o'}
         fig , axs = subplots(1,1)
         for i,j,j0,j1 in Comm_measure.it_compo_and_combination(self._filter_info,self._commutator_measure_info):
             plot_kw['label'] = '{}: ({})&({})'.format(i,labels[j0],labels[j1])
             axs.plot(n[j0]*n[j1],ns_2D[i,j],**plot_kw) 
         axs.legend()
+        axs.set_ylabel('<n0n1>')
+        axs.set_xlabel('<n0>*<n1>')
         axs.title.set_text('n0n1_vs_n0_times_n1')
         return fig
     def fig_delta_square(self):
@@ -2560,7 +2744,8 @@ class Comm_measure(nsVsVDC):
             plot_kw['label'] = '{}: ({})&({})&({})'.format(i,labels[j0],labels[j1],labels[j2])
             axs.plot(I_jct*10**6,delta_square[i,:],**plot_kw) 
         axs.legend()
-        axs.title.set_text('delta_square')
+        axs.set_ylabel('<delta**2>')
+        axs.set_xlabel('I_jct [uA]')
         return fig 
     def fig_comm(self):
         I_jct           = self._compute_I_jct(self._Vdc_antisym,self._R_1M)
@@ -2572,5 +2757,6 @@ class Comm_measure(nsVsVDC):
             plot_kw['label'] = '{}: ({})&({})&({})'.format(i,labels[j0],labels[j1],labels[j2])
             axs.plot(I_jct*10**6,comm[i,:],**plot_kw) 
         axs.legend()
-        axs.title.set_text('comm')
+        axs.set_ylabel('commutator')
+        axs.set_xlabel('I_jct [uA]')
         return fig 
