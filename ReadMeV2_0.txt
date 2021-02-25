@@ -1,0 +1,1 @@
+If this file is present it means that you're in the 2.0 preparation branch
