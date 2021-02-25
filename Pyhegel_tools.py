@@ -47,90 +47,146 @@ class Lakeshore_wrapper(Pyhegel_wrapper):
         If temperatures out of the intended range are used it defaults to 
         cooldown (i.e. self.heater_range is set to 0).
         
+        Notes :
+            - I changes getout_tunder() heating_power from 12.0e-6 to 6.0e-6 because 
+              it was overshooting to much.
         Todos :
             - Makes sure the tables is calibrated properly
                 - Make the tables static
-            - Implement a methods that automatically get out of t.under state
             - Implement warning properly
-            - Add debug options..
         Bugs :
-            - Make cooldown funciton properly
+            - Lorsque cooldown a ete appeler (fin du script) et que je relance le même script
+            le lakeshore ne semble pas chauffé. J'ai du fermer le heater et le réouvrir en mettant un range pour que ça fonctionne comme d'hab.
     """
-    __version__ = {'Lakeshore_wrapper':0.2}
+    __version__ = {'Lakeshore_wrapper':0.3}
     __version__.update(Pyhegel_wrapper.__version__)
     # These tables could be fine tuned
     # And are calibrated on  dilu 3
-    _temperature_range       =   [ 0.007 , 0.020     , 0.050 , 0.100    , 0.200     , 0.400  , 0.700 ] # The upperbound of the interval
-    _temperature_tolerance   =   [ 0.0   , 0.001     , 0.0025, 0.005    , 0.010     , 0.02   , 0.035 ] # The upperbound of temperature error after _stabilization_loop
-    _time_tolerance          =   [ 0.0   , 120       , 60    , 60       , 60        , 60     , 60    ] # The amount of time the temperature error as to be below the temperature_tolerance to say the stabvilization is acheived
-    _heater_range            =   [ 0.0   , 0.000316  , 0.001 , 0.00316  , 0.01      , 0.01   , 0.01  ] # see instruments.lakeshore_370.heater_range for all possible values
-    _proportional            =   [ 25    , 25        , 25    , 12.5     , 6.25      , 6.25   , 6.25  ]
-    _integral                =   [ 120   , 120       , 120   , 120      , 120       , 120    , 120   ]
-    _derivative              =   [ 0     , 0         , 0     , 0        , 0         , 0      , 0     ]
+    _temperature_range       =   [ 0.007005 , 0.020     , 0.050 , 0.100    , 0.200     , 0.400  , 0.700 ] # The upperbound of the interval
+    _temperature_tolerance   =   [ 0.0      , 0.0005    , 0.0025, 0.005    , 0.010     , 0.02   , 0.035 ] # The upperbound of temperature error after _stabilization_loop
+    _time_tolerance          =   [ 0.0      , 120       , 60    , 60       , 60        , 60     , 60    ] # The amount of time the temperature error as to be below the temperature_tolerance to say the stabvilization is acheived
+    _heater_range            =   [ 0.0      , 0.000316  , 0.001 , 0.00316  , 0.01      , 0.01   , 0.01  ] # see instruments.lakeshore_370.heater_range for all possible values
+    _proportional            =   [ 25       , 25        , 25    , 12.5     , 6.25      , 6.25   , 6.25  ]
+    _integral                =   [ 120      , 120       , 120   , 120      , 120       , 120    , 120   ]
+    _derivative              =   [ 0        , 0         , 0     , 0        , 0         , 0      , 0     ]
     def __init__(self, visa_addr ='ASRL1',**options):
         self._set_options(**options)
-        self._lakeshore =  instruments.lakeshore_370(visa_addr)
-        self.set_current_ch(6) # The 6th channel is the temperature of the sample
+        if self._debug :
+            self._lakeshore = None
+        else :
+            self._lakeshore =  instruments.lakeshore_370(visa_addr)
+            self.set_current_ch(6) # The 6th channel is the temperature of the sample
         if self._verbose :
             print "Current channel is : {} \n and has temperature = {} K".format( self._lakeshore.current_ch.get(), self.get_temperature())
+    #############
+    # User interface #
+    #############
     def get_pyhegel_instance(self):
         return self._lakeshore
-    def getout_tunder(self,verbose=False):
+    def getout_tunder(self,**options):
         """
             Notes :
                 - There was a bug in the set_to_close_loop().
                     The heater wasn't turned off and the lakeshore needs to be set to
                     control_mode == 'off' and not 'open_loop'
-                - 
-        """   
-        ch_sample       = 6         # ch=6 : mixing chamber
-        T_target_out    = 0.015     # = 15[mK] : get the value from table 
-        heating_power   = 12.0e-6   # [W] 100% of ther targeted range
-        t_th            = 0.0075    # Thereshold to say we are out of t.under 
-        wait_time       = 5.0       # Before checking if we're out of t.under
-        t_stab          = 0.008     # Target temperature after we're out of t.under
-        if self.get_temperature() < t_th :
-            self._set_autoscan(False)
-            self._set_autoscan_ch(ch_sample)    
-            self._set_to_open_loop()
-            self._set_heater_range(T_target_out)    
-            self._set_heater(heating_power)
-            while True :
-                t = self.get_temperature()
-                if t > t_th :
-                    break
-                if (self._verbose or verbose) :
-                    print "Waiting to get out of t.under"
-                wait(wait_time)
-        self._set_to_close_loop()
-        self.stabilize_temperature(t_stab,verbose=verbose)
+                - PID Oscillates arround 10 mK need to tone down P (set to 12.5)
+            Todos :
+                - Investigate getout_tunder followed by stabilize_temperature followed by coldown followed by getout_tunder followed by stabilize_temperature
+            Bugs :
+                - Verbose not showing in command line
+        """
+        if self._debug :
+            pass
+        else :
+            if (self._verbose or verbose) :
+                print "get out of t.under"
+            ch_sample       = 6         # ch=6 : mixing chamber
+            T_target_out    = 0.015     # = 15[mK] : get the value from table 
+            heating_power   = 6.0e-6    # [W] 100% of ther targeted range   
+            t_th            = 0.0071    # Thereshold to say we are out of t.under 
+            wait_time       = 5.0       # Before checking if we're out of t.under
+            t_stab          = 0.0085     # Target temperature after we're out of t.under
+            if self.get_temperature() < t_th :
+                self._set_autoscan(False)
+                self._set_autoscan_ch(ch_sample)    
+                self._set_to_open_loop()
+                self._set_heater_range(T_target_out)    
+                self._set_heater(heating_power)
+                while True :
+                    t = self.get_temperature()
+                    if t > t_th :
+                        break
+                    if (self._verbose or verbose) :
+                        print "Waiting to get out of t.under"
+                    wait(wait_time)
+            if (self._verbose or verbose) :
+                print "setting lakeshore to close loop"
+            self._set_to_close_loop()
+            self.stabilize_temperature(t_stab,verbose=verbose)
+    def cooldown(self):
+        if self._debug :
+            pass
+        else :
+            self._set_heater_range(0)    # Need to turn the heater off first
+            self._set_control_off()      # Then set the control mode to off (no temperature control)
+    def set_close_state(self):
+        if self._debug :
+            pass
+        else :
+            self.cooldown()
+    def set_current_ch(self,channel):
+        if self._debug :
+            pass
+        else :
+            set(self._lakeshore.current_ch,channel)
+    def get_current_ch(self):
+        if self._debug :
+            return None
+        else :
+            return get(self._lakeshore.current_ch)
+    def get_temperature(self):
+        if self._debug :
+            return 0.0
+        else :
+            return get(self._lakeshore.t)
+    # def get(self):
+        # return self.get_temperature()
+    # def set(self,T):
+        # return self.stabilize_temperature(T)
+    def set_temperature(self,t):
+        if self._debug :
+            pass
+        else :
+            set(self._lakeshore.sp,t)
+    def stabilize_temperature(self,T,verbose=False):
+        if self._debug :
+            pass
+        else :
+            if (self._verbose or verbose) :
+                print "Stabilizing to {}[K]".format(T)
+            self._set_heater_range(T)
+            self._set_PID(T)
+            self.set_temperature(T)
+            self._stabilization_loop(T)
+    #############
+    # private #
+    #############
     def _set_options(self,**options):
-        self._verbose   = options['verbose'] if 'verbose' in options else False
+        self._debug     = options.get('debug')
+        self._verbose   = options.get('verbose')
     def _set_autoscan(self,val_bool):
         set(self._lakeshore.scan,autoscan_en=val_bool)
     def _set_autoscan_ch(self,ch):
         set(self._lakeshore.scan,ch=ch)
-    def cooldown(self):
-        self._set_heater_range(0)    # Need to turn the heater off first
-        self._set_control_off()      # Then set the control mode to off (no temperature control)
-    def set_close_state(self):
-        self.cooldown()
     def _set_control_off(self):
         set(self._lakeshore.control_mode,'off') 
     def _set_to_open_loop(self): 
         set(self._lakeshore.control_mode,'open_loop')
     def _set_to_close_loop(self): 
         set(self._lakeshore.control_mode,'pid')
-    def set_current_ch(self,channel):
-        set(self._lakeshore.current_ch,channel)
-    def get_current_ch(self):
-        return get(self._lakeshore.current_ch)
-    def get_temperature(self):
-        return get(self._lakeshore.t)
-    def get(self):
-        return self.get_temperature()
-    def set_temperature(self,t):
-        return set(self._lakeshore.sp,t)
+        # bug patch try
+        self._set_heater_range(0)
+        self._set_heater_range(0.010)
     def _get_table_index(self,T):
         t_table = self._temperature_range
         index = 0
@@ -142,15 +198,6 @@ class Lakeshore_wrapper(Pyhegel_wrapper):
                 index = i  
                 break 
         return index  
-    def stabilize_temperature(self,T,verbose=False):
-        if (self._verbose or verbose) :
-            print "Stabilizing to {}[K]".format(T)
-        self._set_heater_range(T)
-        self._set_PID(T)
-        self.set_temperature(T)
-        self._stabilization_loop(T)
-    def set(self,T):
-        return self.stabilize_temperature(T)
     def _stabilization_loop(self, T_target):
         t_tol       = self._temperature_tolerance[self._get_table_index(T_target)]
         time_tol    = self._time_tolerance[self._get_table_index(T_target)]
@@ -198,7 +245,7 @@ class Yoko_wrapper(Pyhegel_wrapper):
     __version__ = {'Yoko_wrapper':0.3}
     __version__.update(Pyhegel_wrapper.__version__)
     def __init__(self,visa_addr='USB0::0x0B21::0x0039::91KB11655',**options):
-        self._debug  = options.get('debug')
+        self._set_options(**options)
         if self._debug :
             self._yoko = None
             self._V_dummy = 0.0
@@ -208,6 +255,8 @@ class Yoko_wrapper(Pyhegel_wrapper):
     """
         Wrapper of existing behavior
     """
+    def _set_options(self,**options):
+        self._debug  = options.get('debug')
     def get(self):
         if self._debug :
             return self._V_dummy
@@ -384,7 +433,7 @@ class logger(object):
         
         log_dict (example)
         {
-            'open'          : 'Lauching experiement'
+            'open'          : 'Lauching experiment'
             'close'         : 'Experience over : \n \t Estimated time [s] {:04.2F} \n \t Real time {:04.2F} [s]'
             'loop_sizes'    : (1st_loop,2nd_loop,...)
             'loop'          : 'Progess {:03}/{:03d} \t last_loop time: {:04.2F} [s] '
@@ -403,13 +452,11 @@ class logger(object):
         times_est   = (experiment_time,loop_time)
         
         Todos :
-            - Rethink this class
-            - Make an options for condition formating ...
-            - For V1.0 think about the possibility of using super() instead of the current way of working
-         Bugs :
-            - The first loop call prints a duration that makes no sense
+            - Modifiy the _print() to save (or not) the string of log into a file
+          Bugs :
+            -
     """   
-    __version__     = { 'logger'  : 0.2 }
+    __version__     = { 'logger'  : 0.3 }
     __version__.update(timer.__version__)  
  
     _default_log = \
@@ -434,8 +481,16 @@ class logger(object):
         'conditions'    : '_conditions_frmt'
     }
     _default_time_est = (1.0,)
-    def __init__( self, time_estimates , log_dict ):
+    def __init__( self, time_estimates , log_dict , **options):
         self._attributes_instanciation(time_estimates,log_dict)
+        self.logger_indent      = options['indent'] if options.has_key('indent') else 0
+    def indent(self,n):
+        self.logger_indent = n
+    def _print(self,s):
+        ss =''
+        for i in range(self.logger_indent) :
+            ss += '\t'
+        print ss + s
     def _attributes_instanciation(self,time_estimates , log_dict):
         if log_dict == () or log_dict == None : # Set the default log
             dict_to_attr(self,self._default_log,self._user_key_to_attribute_key)
@@ -453,31 +508,39 @@ class logger(object):
         if self._is_rate :
             self._event_rate = log_dict['rate']
         self._experiment = timer()
+        self._experiment.tic()
+        self._experiment.toc()
         self._loop       = timer(len(self._loop_sizes))
+        self._loop.tic()
+        self._loop.toc()
         self._is_event   = 'events' in log_dict
         if self._is_event :
             self._events_dict = log_dict['events']
-            self._events_len  = len(self._events_dict.keys())
+            self._events_len  = len(self._events_dict)
             self._events      = timer(self._events_len)
-            self._events_frmt = self._build_events_frmt()
+            self._events.tic(0)
+            self._events.toc(0)
+            self._conditions_frmt = log_dict['conditions_frmt'] if log_dict.has_key('conditions_frmt') else ('{: .1f}',)
+                
+        
     def open(self):
         self._experiment.tic()
         for i in range(len(self._loop_sizes)-1):
             self._loop.tic(i)
         if self._is_event :
-             self._events.tic(0)
-        print(self._open_str)
+            self._events.tic(0)
+        self._print(self._open_str)
     def close(self):
         self._experiment.toc()
         if self._is_event :
              self._events.toc(self._events_len-1)
         total_t = self._experiment.durations()[0]
-        print (self._close_frmt).format(self.time_estimate[0],total_t)
+        self._print((self._close_frmt).format(self.time_estimate[0],total_t))
     def loop(self,loop_index,loop_icrmnt):
         self._loop.toc(loop_index)
         loop_time  = self._loop.durations()[loop_index]
         self._loop.tic(loop_index)
-        print self._loop_frmt.format(loop_icrmnt, self._loop_sizes[loop_index] , loop_time)
+        self._print (self._loop_frmt.format(loop_icrmnt, self._loop_sizes[loop_index] , loop_time))
     def event(self,index):
         self._events.toc(index)
         self._events.tic((index+1)%self._events_len)  
@@ -486,9 +549,9 @@ class logger(object):
         s = ''
         tab = ' | '
         d = self._events_dict
-        for i,key in enumerate(d):
+        for i,e in enumerate(d):
             s += tab
-            s += d[key].format(drtns[i])
+            s += e.format(drtns[i])
         if self._is_rate:
             s += tab
             num = self._event_rate[0]
@@ -498,10 +561,14 @@ class logger(object):
     def events_print(self,condition_tuple):
         s = self._build_events_frmt()
         s_tuple = '('
-        for t in condition_tuple :
-            s_tuple += '{: .1f},'.format(t)
+        for i,t in enumerate(condition_tuple) :
+            try :
+                cnd_frmt = self._conditions_frmt[i]
+            except IndexError : 
+                cnd_frmt = self._conditions_frmt[0]
+            s_tuple += cnd_frmt.format(t) + ','
         s_tuple += ')'
-        print s_tuple + '\t' + s
+        self._print(s_tuple + '\t' + s)
 
 class logger_aqc_and_compute(logger):
     """
@@ -520,10 +587,10 @@ class logger_aqc_and_compute(logger):
             {
             'loop_sizes'    : ( n_measures , l_Vdc ),
             'events'        : 
-                            {
-                                "Aquisition": "Acquisition : {:04.2F} [s]", 
-                                "Computing" : "Computing : {:04.2F} [s] "
-                            },
+                            [
+                                "Acquisition : {:04.2F} [s]", 
+                                "Computing : {:04.2F} [s] "
+                            ],
             'rate'          : ( l_data*1.0e-9 ,"Rate : {:04.2F} [GSa/s] " )
             }
             super(logger_aqc_and_compute,self).__init__(time_estimates,_aqc_and_compute_log)
@@ -534,7 +601,26 @@ class ExperimentErrors(Exception):
     """
     pass
 
+class ExperimentWarnings(Warning):
+    """
+        Base class for pyHegel tools warnings
+    """
+    @classmethod
+    def warn(cls,*arg,**kwargs):
+        self = cls(*arg,**kwargs)
+        print self
+        return self
+
+class LoadingWarning(ExperimentWarnings):
+    """
+       When loading from saved data
+    """
+    pass
+    
 class VersionsError(ExperimentErrors):
+    """
+        Deprecated
+    """
     def __init__(self,versions_current,versions_loaded):
         self.versions_current  = versions_current
         self.version_loaded = versions_loaded
@@ -542,6 +628,15 @@ class VersionsError(ExperimentErrors):
         s_current  = "Current versions : \n\t  {}".format(versions_current)
         self.message    = s_load+'\n'+s_current
         super(VersionsError,self).__init__(self.message)
+  
+class VersionsWarning(ExperimentWarnings):
+    def __init__(self,versions_current,versions_loaded):
+        self.versions_current  = versions_current
+        self.version_loaded = versions_loaded
+        s_load     = "Loaded versions  : \n\t {}".format(versions_loaded)
+        s_current  = "Current versions : \n\t  {}".format(versions_current)
+        self.message    = s_load+'\n'+s_current
+        super(VersionsWarning,self).__init__(self.message)
 
 class ConditionsError(ExperimentErrors):
     """
@@ -557,11 +652,177 @@ class UndefinedStateError(ExperimentErrors):
 #################
 # Pyhegel tools #
 #################
-    
-class Experiment(object):
+
+class Info(object):
     """
         TLDR :
-            (Pseudo code : Experiment) 
+    """
+    __version__     = { 'Analysis'  : 1.0 }
+    def _set_options(self,options):
+        self._options                   = options
+        self._verbose                   = options.get('verbose')
+        self._test                      = options['test']    if options.has_key('test') else True 
+    def _set_conditions(self,conditions):
+        self._conditions                = conditions
+        if type(conditions[0]) != int :
+            raise ConditionsError('n_measures should be int')
+        self._n_measures                = conditions[0]     # The first element of the tuple is the number of repetions
+        self._conditions_core_loop_raw  = conditions[1:]    # The 2nd   element ...          is an list of 1D array    
+    def _set_meta_info(self,meta_info):
+        self._meta_info                 = meta_info
+        self._meta_info['repetitions']  = meta_info['repetitions'] if meta_info.has_key('repetitions') else 0
+    def _build_attributes(self):
+        pass
+
+class Analysis(Info):
+    """
+        TLDR :
+            - A class for the analysis of experiments (see: class Experiment)
+            - can be constructed either 
+                - from an experiment class object
+                - or from conditions,meta_info,data,**options
+                - or from saved data
+            - It will have all the attibutes defined by conditions,meta_info,data and options
+            - It will check for version compatibility
+            - User will write a class that inherits from this one for specific experiment
+        Todos :
+            - Update analyse in init ...
+            - Change update analysis to update
+        Bugs :
+        Knowed issues :
+            Using numpy savez to save data makes it such that allow_pickle option must be used.
+            Dictionnary therefore must be loaded in a particular way and list and tuples are converted
+            to np_array.
+    """
+    __version__     = { 'Analysis'  : 1.0 }
+    @classmethod
+    def description(cls):
+        print cls.__doc__
+    def __init__(self,conditions,data_dict,meta_info=None,**options):
+        """
+            - conditions    : example == (n_measures, nd_array_core_loop_cnds) 
+            - devices       : example == (guzik,yoko,)
+            - meta_info     : example == (l_kernel,l_data,R_jct,dt,)
+            - option        : kwarg depends on the specific child class
+        """   
+        self._set_options(options)
+        self._set_conditions(conditions)
+        self._set_meta_info(meta_info)
+        self._build_attributes()
+        self._load_data_dict(data_dict)
+    #############
+    # User interface #
+    #############
+    # def update_analysis   : (below)
+    # def save_data         : (below)
+    # def load_data         : (below)
+    # def get_data_dict     : (below)
+    ######################
+    # Analysis Utilities #
+    ######################
+    @staticmethod
+    def SE(mu2k,muk,n):
+        """ 
+            Voir notes Virally Central limit theorem
+            Computation of the standard error for the moment of order K
+            mu2k : is the moment of order 2 k
+            muk  : is the moment of order k
+            If these moments are not centered then the definition is good for none centered moment
+            Idem for centered moment
+        """
+        return sqrt(numpy.abs(mu2k-muk**2)/float(n))
+    #############
+    # Utilities #
+    #############
+    def _compute_n_measure(self):
+        return 1 if self._test else self._n_measures
+    def _n_measure_total(self):
+        return self._n_measures*(1+self._meta_info['repetitions'])
+    def get_data_dict(self):
+        return self._data
+    ############
+    # Reduction/Analysis #
+    ############
+    def _compute_analysis(self):
+        pass
+    def _build_data(self):
+        return {} # dummy default behavior
+    def _update_data(self):
+        self._data = self._build_data()
+    def update_analysis(self,**kwargs):
+        self._compute_analysis(**kwargs)
+        self._update_data()
+    #############
+    # Save/load #
+    #############
+    def save_data(self,path_save,prefix='anal_'):    
+        time_stamp                  = time.strftime('%y%m%d-%H%M%S') # File name will correspond to when the experiment ended
+        filename                    = prefix+'{}.npz'.format(time_stamp)
+        to_save                     = self._data
+        to_save['_versions_saved']  = self.__version__
+        to_save['_options']         = self._options
+        to_save['_conditions']      = self._conditions
+        to_save['_meta_info']       = self._meta_info
+        savez_compressed(os.path.join(path_save,filename),**to_save)
+        print "Data saved \n \t folder : {} \n \t {}".format(path_save,filename) 
+    def _load_data_dict(self,data_dict):
+        dict_to_attr(self,data_dict)
+        self._data  = data_dict
+    def _check_cls_vs_data_versions(self):
+        try : 
+            versions_saved = self._versions_saved
+        except AttributeError :
+            versions_saved = None
+        version = self.__version__
+        try :
+            version.pop(type(self).__name__)
+            version.pop(Analysis.__name__)
+        except KeyError :
+            LoadingWarning.warn('Analysis class did not contain its own version number.')
+        if ( version != versions_saved ) and versions_saved:
+            VersionsWarning.warn(version,versions_saved)
+    @classmethod
+    def load_data(cls,folder,filename):
+        """
+            To load data create an experiment object using
+            experiment = class_name().load_data(folder,filename)
+        """
+        data                    = numpy.load(folder+'\\'+filename,allow_pickle=True)
+        data                    = dict(data)
+        try :
+            conditions          = data.pop('_conditions')
+        except KeyError as er:
+            raise LoadingWarning('Missing key '+er.args[0]+' in loaded data.')
+        try :
+            meta_info           = data.pop('_meta_info')[()]        # to load a dict saved by numpy.savez
+        except KeyError as er :
+            LoadingWarning.warn('Missing key '+er.args[0]+' in loaded data.')
+            meta_info = None
+        try :
+            options             = data.pop('_options')[()]          # to load a dict saved by numpy.savez
+        except KeyError as er :
+            LoadingWarning.warn('Missing key '+er.args[0]+' in loaded data.')
+            options = None
+        self                    = cls(conditions,data,meta_info,**options)
+        self._check_cls_vs_data_versions()
+        try :
+            self._versions_saved= data.pop('_versions_saved')[()] 
+        except KeyError as er :
+            LoadingWarning.warn('Missing key '+er.args[0]+' in loaded data.')
+            self._versions_saved = None
+        return self
+    @classmethod 
+    def load_exp(cls,exp):
+        conditions  = exp._conditions
+        meta_info   = exp._meta_info
+        options     = exp._options
+        data        = exp.get_data_dict()
+        return cls(conditions,data,meta_info,**options)
+    
+class Experiment(Analysis):
+    """
+        TLDR :
+            (Pseudo code (not up to date): Experiment) 
                 experimentals condition, meta_info, pyhegel devices and options are given to the constructor
                 
                 child = children_class(conditions,devices,meta_info,op1=True,op2=True,op3=x,)
@@ -589,8 +850,11 @@ class Experiment(object):
                 
                 data = child.get_data()                     # return child._data a list of array defined by the user
                                                                 # The user can modify that data and update_analysis() followed by plots to tinker with the data
-                
-        HOW TO WRITE THE CHILD CLASS :
+        
+        - New with version 1.0
+            - There is now a Analysis dedicated class
+            
+        HOW TO WRITE THE CHILD CLASS (Not up to date):
         This class is written to give flexibility and reduce the amount of code that the user as to writte for the child class.
         This section describes what the user as to write in the child class
         - __init__ function
@@ -649,9 +913,6 @@ class Experiment(object):
                     Does the rest of the analysis job (i.e. calling function to convert np.arrays to np.arrays)
                 - _update_data()
                     builds self.data list (containts its structure) from internal variables/attributes
-                - _load_data_list()
-                    is the inverse of update_data
-                    buils internal variables/attributes from a list of np.arrays
             Writting those function defines the proper behavior when 
             updating the analysis and loading from existing data and 
                 
@@ -664,46 +925,15 @@ class Experiment(object):
             - _CAPS_.. are overwritable by the child function (used for grand-mother, mother, child situations)
         
         Todos :
+            - Add a way to display parents descriptions using self.description
             - Update __doc__
-            - Add saving options 
-                - There should be a way to run only the 1st analysis step during experiment
-                and save the data arising only from this part (goal to not repeat measurment for nothing)
-                - The 2nd analysis step can be added afterward and the new data structure can then be saved
-                and loaded in the next loading phase
-                - This mean that the loading function could load only the 1st part of the data or both
-                - Maybe update_analysis should be split in
-                    - data_reduction :> 1st step
-                        run automatically after mesure()?
-                    - data_analysis  :> 2nd step
-            - Should I seperate saved structure into ?
-                - data_reduction_date.npz
-                - data_analysis_date.npz
-                - Maybe my class structure should follow that too ? 
-                    - Some classes for measuring and making some reduction
-                        constructed from conditions, device and meta_info
-                        or from a data structure from its class
-                        Those class should definitively all be in global pyhegel tools
-                    - Some parrallel meant for analysis
-                        constructed either from
-                            - a measuring class kepts only the parts it wants
-                            - loading a data structure either
-                                - from a compatible measurment class
-                                - from its class
             - Add reset_obj ?
-            - Add reset_analysis ?
-            - Remode the unecessary dunders in __init__
+                - done for some sub classes but idk if im done implementing this...
         Bugs :
-            - The current way of saving and loading stuff can convert int -> float
-            which can lead to some problem some times. No global fix for now. 
-            I've patched it in the child class by enforcing type in the constructor methods using int()
-            - Computing before measurement can sometime lead to crash dependin on what type of computation is done during analysis
             - After constructing from data structure the destructor stills try to clean devices ?
     """
-    __version__     = { 'Experiment'  : 0.7 }
+    __version__     = { 'Experiment'  : 1.0 }
     __version__.update(logger.__version__)
-    @classmethod
-    def description(cls):
-        print cls.__doc__
     def __init__(self,conditions,devices,meta_info=None,**options):
         """
             - conditions    : example == (n_measures, nd_array_core_loop_cnds) 
@@ -711,81 +941,64 @@ class Experiment(object):
             - meta_info     : example == (l_kernel,l_data,R_jct,dt,)
             - option        : kwarg depends on the specific child class
         """   
-        self._SET_options(options)
-        self._SET_conditions(conditions)
-        self._SET_meta_info(meta_info)
-        self._BUILD_attributes()
+        self._set_options(options)
+        self._set_conditions(conditions)
+        self._set_meta_info(meta_info)
+        self._build_attributes()
         self._SET_devices(devices)
         self._INIT_objects()
         self._INIT_log()
-    def _SET_options(self,options):
-        self._verbose   = options['verbose'] if 'verbose'   in options else False
-        if self._verbose : 
-            print '{} is setting options'.format(self.__class__.__name__)
-        self._data_from_experiment  = options['loading_data']   if 'loading_data'   in options else True
-        self._test                  = options['test']           if 'test'           in options else True 
-        self._debug                 = options['debug']          if 'debug'          in options else False 
-        self._options               = options
-        self._set_options(options)
-    def _SET_conditions(self,conditions):
-        if self._verbose : 
-            print '{} is setting conditions'.format(self.__class__.__name__)
-        if type(conditions) != tuple :
-            raise ConditionsError('Conditions should be a tuple')
-        self._conditions                = conditions
-        if type(conditions[0]) != int :
-            raise ConditionsError('n_measures should be int')
-        self._n_measures                = conditions[0]     # The first element of the tuple is the number of repetions
-        self._conditions_core_loop_raw  = conditions[1:]    # The 2nd   element ...          is an list of 1D array
-        self._set_conditions(conditions)       
-    def _SET_meta_info(self,meta_info):
-        if self._verbose : 
-            print '{} is setting meta_info'.format(self.__class__.__name__)
-        self._meta_info                 = meta_info
-        self._meta_info['repetitions']  = meta_info['repetitions'] if meta_info.has_key('repetitions') else 0
-        self._set_meta_info(meta_info) 
-    def _BUILD_attributes(self):
-        if self._verbose : 
-            print '{} is building attributes'.format(self.__class__.__name__)
-        self._build_attributes()
+    def _set_options(self,options):
+        super(Experiment,self)._set_options(options)
+        self._data_from_experiment  = options['loading_data']   if options.has_key('loading_data') else True
+        self._debug                 = options.get('debug')     
     def _SET_devices(self,devices):
         if devices == None or devices == () or self._data_from_experiment == False :
             self._devices = None
         else :
-            if self._verbose :
-                print '{} is setting devices'.format(self.__class__.__name__)
             self._devices  =   devices
             self._set_devices(devices)
+    def _set_devices(self,devices):
+        pass
     def _INIT_objects(self):
         if self._data_from_experiment == False :
             pass
         else :
-            if self._verbose : 
-                print '{} is initializing objects'.format(self.__class__.__name__)
             self._init_objects()
+    def _init_objects(self):
+        pass
     def _INIT_log(self):
         if self._data_from_experiment == False :
             pass
         else :
-            if self._verbose : 
-                print '{} is initializing log'.format(self.__class__.__name__)
-            self._init_log()    
-    def _set_options(self,options):
-        pass
-    def _set_conditions(self,conditions):
-        pass
-    def _set_meta_info(self,meta_info):
-        pass
-    def _build_attributes(self):
-        pass
-    def _set_devices(self,devices):
-        pass
-    def _init_objects(self):
-        pass
+            self._init_log()  
     def _init_log(self):
-        self._log            =   logger((),()) # Default timer
-    def get_data(self):
-        return self._data
+        self._log            =   logger((),()) # Default timer    
+    #############
+    # User interface #
+    #############
+    def measure(self):
+        self._measurement_loop()
+    def repeat_measure(self,n_repetitions = 1):
+        """
+            In the current state of the class if I do
+            n_measures = n_measures + condition[0]
+            the repetition is going to be longer than the previous execution
+            to keep track of the number of total number of repetition im going to temporarly use 
+            a new variable, but this means that conputations using n_measures (like all _std ) wont be correct.
+            
+            Repetitions are saved/loaded automatically in meta_info
+            Todos :
+                - Update the std calculations to include repetitions
+                - Anything else regarding that feature ?
+            Bugs :
+        """
+        for  rep in range(n_repetitions):
+            self._meta_info['repetitions'] += 1
+            self._measurement_loop()
+    # def update_analysis   : (below)
+    # def save_data         : (below)
+    # def load_data         : (below)
     #############
     # Utilities #
     #############
@@ -800,8 +1013,6 @@ class Experiment(object):
         for a in args :
             index_vec += ( range(len(a)) , )
         return itertools.product(*index_vec) , itertools.product(*args)
-    def _compute_n_measure(self):
-        return 1 if self._test else self._n_measures
     def _set_all_devices(self,conditions):
         """
             Should always be implemented
@@ -832,7 +1043,7 @@ class Experiment(object):
     def _repetition_loop_start(self,n):
         self._log.loop(0,n) 
     def _core_loop_iterator(self):
-        return Experiment._super_enumerate(self._conditions_core_loop_raw) # by default no modification on the raw input
+        return Experiment._super_enumerate(*self._conditions_core_loop_raw) # by default no modification on the raw input
     def _loop_core(self,index_tuple,condition_tuple):
         self._log.events_print(condition_tuple)
     def _repetition_loop_end(self,n):
@@ -843,96 +1054,6 @@ class Experiment(object):
                 print 'Setting device to close state'
             self._set_devices_to_close_state()
         self._log.close()
-    ######################
-    # Analysis Utilities #
-    ######################
-    @staticmethod
-    def SE(mu2k,muk,n):
-        """ 
-            Voir notes Virally Central limit theorem
-            Computation of the standard error for the moment of order K
-            mu2k : is the moment of order 2 k
-            muk  : is the moment of order k
-            If these moments are not centered then the definition is good for none centered moment
-            Idem for centered moment
-        """
-        return sqrt(numpy.abs(mu2k-muk**2)/float(n))
-    ############
-    # Analysis #
-    ############
-    def _compute_reduction(self):
-        pass
-    def _compute_analysis(self):
-        pass
-    def _build_data(self):
-        return {} # dummy default behavior
-    def _update_data(self):
-        self._data = self._build_data()     
-    ########################################################
-    # Should never change/double underscore unless public #
-    ########################################################
-    def save_data(self,path_save):    
-        time_stamp                  = time.strftime('%y-%m-%d_%Hh%M') # File name will correspond to when the experiment ended
-        filename                    = 'data_{}.npz'.format(time_stamp)
-        to_save                     = self._data
-        to_save['_versions_saved']  = self.__version__
-        to_save['_options']         = self._options
-        to_save['_conditions']      = self._conditions
-        to_save['_meta_info']       = self._meta_info
-        savez_compressed(os.path.join(path_save,filename),**to_save)
-        print "Data saved \n \t folder : {} \n \t {}".format(path_save,filename)  
-    @classmethod
-    def load_data(cls,folder,filename):
-        """
-            To load data create an experiment object using
-            experiment = class_name().load_data(folder,filename)
-        """
-        data                    = numpy.load(folder+'\\'+filename,allow_pickle=True)
-        data                    = dict(data)
-        conditions              = data.pop('_conditions')
-        devices                 = None
-        meta_info               = data.pop('_meta_info')[()] # to load a dict saved by numpy.savez
-        options                 = data.pop('_options')[()]   # to load a dict saved by numpy.savez
-        options['loading_data'] = True
-        self                    = cls(conditions,devices,meta_info,**options)
-        self._versions_saved    = data.pop('_versions_saved')[()]
-        try :
-            self._check_cls_vs_data_versions()
-        except VersionsError :
-            ans = yes_or_no('Try loading anyway ?')
-            if ans :
-                dict_to_attr(self,data)
-            else :
-                s = \
-                """
-                Constructor called using conditions,meta_info and options
-                but no devices and no data loaded.
-                """
-                raise UndefinedStateError(s)
-        return self      
-    def measure(self):
-        self._measurement_loop()
-    def repeat_measure(self,n_repetitions = 1):
-        """
-            In the current state of the class if I do
-            n_measures = n_measures + condition[0]
-            the repetition is going to be longer than the previous execution
-            to keep track of the number of total number of repetition im going to temporarly use 
-            a new variable, but this means that conputations using n_measures (like all _std ) wont be correct.
-            
-            Repetitions are saved/loaded automatically in meta_info
-            Todos :
-                - Update the std calculations to include repetitions
-                - Anything else regarding that feature ?
-            Bugs :
-        """
-        for  rep in range(n_repetitions):
-            self._meta_info['repetitions'] += 1
-            self._measurement_loop()
-    def _n_measure_total(self):
-        return self._n_measures*(1+self._meta_info['repetitions'])
-    def update_analysis(self,**kargs):
-        return self._update_analysis_from_aquisition(**kargs) if self._data_from_experiment else self._update_analysis_from_load(**kargs)       
     def _measurement_loop(self):
         main_it = self._repetition_loop_iterator()
         self._all_loop_open()
@@ -943,19 +1064,67 @@ class Experiment(object):
                 self._loop_core(index_tuple,condition_tuple)
             self._repetition_loop_end(n)
         self._all_loop_close()
-    def _update_analysis_from_aquisition(self,**kargs) :
+    ############
+    # Reduction/Analysis #
+    ############
+    def _compute_reduction(self):
+        pass
+    def update_analysis(self,**kwargs):
+        return self._update_analysis_from_aquisition(**kwargs) if self._data_from_experiment else self._update_analysis_from_load(**kwargs)  
+    def _update_analysis_from_aquisition(self,**kwargs) :
         self._compute_reduction()
-        self._compute_analysis(**kargs)
+        self._compute_analysis(**kwargs)
         self._update_data()
-    def _update_analysis_from_load(self,**kargs):
-        self._compute_analysis(**kargs)
+    def _update_analysis_from_load(self,**kwargs):
+        self._compute_analysis(**kwargs)
         self._update_data()
+    #############
+    # Save/load #
+    ############# 
+    def save_data(self,path_save):    
+        super(Experiment,self).save_data(path_save,prefix='exp_')
     def _check_cls_vs_data_versions(self):
-        if self._verbose :
-            key = self.__class__.__name__
-            print 'Loading {} version {}'.format(key,self.__version__[key])
-        if not ( self.__version__ == self._versions_saved ):
-            raise VersionsError(self.__version__,self._versions_saved)
+        try : 
+            versions_saved = self._versions_saved
+        except AttributeError :
+            versions_saved = None
+        version = self.__version__
+        if not ( version == versions_saved ):
+            LoadingWarning.warn(version,versions_saved)
+    @classmethod
+    def load_data(cls,folder,filename):
+        """
+            To load data create an experiment object using
+            experiment = class_name().load_data(folder,filename)
+        """
+        data                    = numpy.load(folder+'\\'+filename,allow_pickle=True)
+        data                    = dict(data)
+        try :
+            conditions          = data.pop('_conditions')
+        except KeyError as er:
+            raise LoadingWarning('Missing key '+er.args[0]+' in loaded data.')
+        devices                 = None
+        try :
+            meta_info           = data.pop('_meta_info')[()]        # to load a dict saved by numpy.savez
+        except KeyError as er :
+            LoadingWarning.warn('Missing key '+er.args[0]+' in loaded data.')
+            meta_info = None
+        try :
+            options             = data.pop('_options')[()]          # to load a dict saved by numpy.savez
+        except KeyError as er :
+            LoadingWarning.warn('Missing key '+er.args[0]+' in loaded data.')
+            options = None
+        options['loading_data'] = True
+        self                    = cls(conditions,devices,meta_info,**options)
+        try :
+            self._versions_saved= data.pop('_versions_saved')[()] 
+        except KeyError as er :
+            LoadingWarning.warn('Missing key '+er.args[0]+' in loaded data.')
+            self._versions_saved = None
+        self._load_data_dict(data)
+        self._check_cls_vs_data_versions()
+        return self          
+    
 
 class Lagging_computation(Experiment):
     """
@@ -1002,6 +1171,11 @@ class Lagging_computation(Experiment):
 
 class Conditions_logic(object):
     """
+        STATIC ONLY CLASS
+        
+        Methods with first argument beiing self must be called like
+        Conditions_logic.method(object,*args,**kwargs)
+        
         Manages the logic arround the condition tuples and the
         experimental conditions
         
@@ -1018,8 +1192,10 @@ class Conditions_logic(object):
         Bugs :
     """
     __version__     = { 'Conditions_logic'  : 0.4 }
+    @staticmethod
     def _set_options(self,**options):
         self._conditions_options      =   {'interlacing': options.get('interlacing') , 'antisym':options.get('Vdc_antisym') }
+    @staticmethod
     def _build_attributes(self):
         # todos add options for the different scenarios of experiments
         # Vdc only experiment
@@ -1051,6 +1227,12 @@ class Conditions_logic(object):
     @staticmethod
     def compute_default_ref(Vdc):
         return numpy.concatenate(([0],Vdc))
+    #################
+    # Loop behavior #
+    #################
+    @staticmethod
+    def _core_loop_iterator(self):
+        return Experiment._super_enumerate(self._conditions_exp)
     ######################
     # Analysis Utilities #
     ######################
@@ -1095,44 +1277,6 @@ class Conditions_logic(object):
             swap = (swapaxes[0]+1,swapaxes[1]+1)
             Y_diff = Y_diff.swapaxes(*swap)
         return  Y_diff
-
-class Conditionned_exp(Conditions_logic,Experiment):
-    """
-        This implement the logic imbeded into Condition_logic and
-        makes it so that the core loop iterates automatically over
-        the conditionned arrays.
-        
-        Set     automatically the _conditions_options dict
-        Build   conditions  specific attributes 
-        
-        Todos : 
-        Bugs :
-    """
-    __version__     = { 'Conditionned_exp'  : 0.6 }
-    __version__.update(Experiment.__version__)
-    __version__.update(Conditions_logic.__version__)
-    def _set_options(self,options):
-        Conditions_logic._set_options(self,**options)   #stactic
-    def _build_attributes(self):
-        Conditions_logic._build_attributes(self)        #stactic
-    def _core_loop_iterator(self):
-        return Experiment._super_enumerate(self._conditions_exp)
-
-class Conditioned_Lagging_exp(Conditions_logic,Lagging_computation):
-    """
-        Same as Condition_logic but with Lagging_computation experiement
-        Todos : 
-        Bugs :
-    """
-    __version__     = { 'Conditioned_Lagging_exp'  : 0.5 }
-    __version__.update(Lagging_computation.__version__)
-    __version__.update(Conditions_logic.__version__)
-    def _set_options(self,options):
-        Conditions_logic._set_options(self,**options)   #stactic
-    def _build_attributes(self):
-        Conditions_logic._build_attributes(self)        #stactic
-    def _core_loop_iterator(self):
-        return Experiment._super_enumerate(self._conditions_exp)
 
 class Tunnel_junction(object):
     """
