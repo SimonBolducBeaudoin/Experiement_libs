@@ -1,0 +1,1 @@
+In Version 1.0 only patch bugs if possible dont add features (keep that for version 2.0)
